@@ -2636,6 +2636,109 @@ fn binary_applies_named_shadowing_per_exact_namespace() {
 }
 
 #[test]
+fn binary_rejects_local_globs_shadowed_by_private_type_and_value_bindings() {
+    let workspace = TempDir::new().unwrap();
+    fs::write(
+        workspace.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"app\", \"dep\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    write_member(
+        &workspace,
+        "app",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\ndep = { path = \"../dep\" }\n",
+        "",
+    );
+    write_member(
+        &workspace,
+        "dep",
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "#![allow(hidden_glob_reexports, dead_code, non_snake_case)]\npub mod donor {\n    pub struct Thing;\n    pub fn action() {}\n    pub struct Alias;\n    pub struct Same;\n    pub type Split = u8;\n    pub fn Split() {}\n    pub fn Conditional() {}\n}\npub use donor::*;\npub(crate) struct Thing;\npub(crate) fn action() {}\npub(crate) use donor::Alias;\npub type Same = u8;\npub(crate) fn Same() {}\npub(crate) fn Split() {}\n#[cfg(any())]\npub(crate) fn Conditional() {}\n",
+    );
+    lock_workspace(&workspace);
+
+    for name in ["Thing", "action", "Alias"] {
+        let shadowed = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+            .args([
+                &format!("use dep::{name};"),
+                "--root",
+                workspace.path().to_str().unwrap(),
+                "--package",
+                "app",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            !shadowed.status.success(),
+            "{name}: stdout: {}",
+            String::from_utf8_lossy(&shadowed.stdout)
+        );
+        assert!(
+            String::from_utf8_lossy(&shadowed.stderr).contains("is private"),
+            "{name}: {}",
+            String::from_utf8_lossy(&shadowed.stderr)
+        );
+
+        fs::write(
+            workspace.path().join("app/src/lib.rs"),
+            format!("use dep::{name};\n"),
+        )
+        .unwrap();
+        let compiler = Command::new("cargo")
+            .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+            .args([
+                "check",
+                "--offline",
+                "--locked",
+                "--manifest-path",
+                workspace.path().join("Cargo.toml").to_str().unwrap(),
+                "-p",
+                "app",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            !compiler.status.success(),
+            "compiler unexpectedly accepted private binding {name}"
+        );
+        assert!(
+            String::from_utf8_lossy(&compiler.stderr).contains("is private"),
+            "{name}: {}",
+            String::from_utf8_lossy(&compiler.stderr)
+        );
+        fs::write(workspace.path().join("app/src/lib.rs"), "").unwrap();
+    }
+
+    for (import, expected) in [
+        ("use dep::Same;", "item: type Same"),
+        ("use dep::Split;", "item: type Split"),
+        ("use dep::Conditional;", "item: fn Conditional"),
+        ("use dep::donor::Thing;", "item: struct Thing"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+            .args([
+                import,
+                "--root",
+                workspace.path().to_str().unwrap(),
+                "--package",
+                "app",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{import}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains(expected),
+            "{import}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+}
+
+#[test]
 fn binary_honors_self_import_namespaces_and_primitive_reexports() {
     let workspace = TempDir::new().unwrap();
     for member in ["app", "shape_dep", "origin"] {

@@ -4,7 +4,7 @@ use rustdoc_types::{
     GenericBound, GenericParamDefKind, Id, Item, ItemEnum, MacroKind, ReprKind, StructKind, Term,
     TraitBoundModifier, Type, VariantKind, Visibility, WherePredicate,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::path::PathBuf;
@@ -741,6 +741,18 @@ fn find_child(
     namespace: Option<NamespaceConstraint>,
     visited: &mut HashSet<Id>,
 ) -> Result<Id, SymbolError> {
+    find_child_with_shadowed_namespaces(krate, module_id, name, namespace, 0, visited)
+        .map(|(id, _)| id)
+}
+
+fn find_child_with_shadowed_namespaces(
+    krate: &Crate,
+    module_id: Id,
+    name: &str,
+    namespace: Option<NamespaceConstraint>,
+    shadowed_namespaces: u8,
+    visited: &mut HashSet<Id>,
+) -> Result<(Id, u8), SymbolError> {
     if !visited.insert(module_id) {
         return Err(SymbolError::InvalidRustdoc(format!(
             "cycle while resolving '{name}'"
@@ -754,24 +766,34 @@ fn find_child(
         ))
     })?;
 
-    if namespace == Some(NamespaceConstraint::Type)
-        && has_private_type_binding(krate, children, name)?
-    {
-        return Err(SymbolError::NotFound(format!(
-            "'{name}' is private under {}",
-            path_label(krate, module_id)
-        )));
+    let local_private_namespaces = constrained_namespaces(
+        private_binding_namespaces(krate, children, name)?,
+        namespace,
+    );
+    let shadowed_namespaces = shadowed_namespaces | local_private_namespaces;
+    let mut direct_matches = Vec::new();
+    for id in direct_matching_children(krate, children, name, namespace)? {
+        let namespaces =
+            constrained_namespaces(item_namespaces(krate, id)?, namespace) & !shadowed_namespaces;
+        if namespaces != 0 {
+            direct_matches.push((id, namespaces));
+        }
     }
-    let direct_matches = direct_matching_children(krate, children, name, namespace)?;
     match direct_matches.as_slice() {
         [_] => {}
         [] => {}
-        _ => return Err(ambiguous_symbol(krate, name, &direct_matches)),
+        _ => {
+            return Err(ambiguous_symbol(
+                krate,
+                name,
+                &direct_matches.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            ));
+        }
     }
 
     let mut glob_errors = Vec::new();
-    let mut glob_matches = Vec::new();
-    let mut glob_identities = HashSet::new();
+    let mut glob_matches: Vec<(Id, u8)> = Vec::new();
+    let mut glob_identities: HashMap<Id, usize> = HashMap::new();
     for child_id in children {
         let child = item(krate, *child_id)?;
         if !is_public(child) {
@@ -792,10 +814,21 @@ fn find_child(
                 Ok(target) => match item(krate, target) {
                     Ok(target_item) if is_path_container(target_item) => {
                         let mut branch_visited = visited.clone();
-                        match find_child(krate, target, name, namespace, &mut branch_visited) {
-                            Ok(found) => {
-                                if glob_identities.insert(canonical_item_id(krate, found)?) {
-                                    glob_matches.push(found);
+                        match find_child_with_shadowed_namespaces(
+                            krate,
+                            target,
+                            name,
+                            namespace,
+                            shadowed_namespaces,
+                            &mut branch_visited,
+                        ) {
+                            Ok((found, namespaces)) => {
+                                let identity = canonical_item_id(krate, found)?;
+                                if let Some(index) = glob_identities.get(&identity) {
+                                    glob_matches[*index].1 |= namespaces;
+                                } else {
+                                    glob_identities.insert(identity, glob_matches.len());
+                                    glob_matches.push((found, namespaces));
                                 }
                             }
                             Err(err) => glob_errors.push(format!(
@@ -822,28 +855,36 @@ fn find_child(
         }
     }
 
-    if let [direct] = direct_matches.as_slice() {
-        let direct_namespaces = constrained_namespaces(item_namespaces(krate, *direct)?, namespace);
+    if let [(direct, direct_namespaces)] = direct_matches.as_slice() {
         let distinct_globs = glob_matches
             .into_iter()
-            .filter(|glob| {
-                item_namespaces(krate, *glob).is_ok_and(|namespaces| {
-                    constrained_namespaces(namespaces, namespace) & !direct_namespaces != 0
-                })
-            })
+            .filter(|(_, namespaces)| namespaces & !direct_namespaces != 0)
             .collect::<Vec<_>>();
         if distinct_globs.is_empty() {
-            return Ok(*direct);
+            return Ok((*direct, *direct_namespaces));
         }
         let mut candidates = vec![*direct];
-        candidates.extend(distinct_globs);
+        candidates.extend(distinct_globs.iter().map(|(id, _)| *id));
         return Err(ambiguous_symbol(krate, name, &candidates));
     }
 
     match glob_matches.as_slice() {
-        [child_id] => return Ok(*child_id),
+        [candidate] => return Ok(*candidate),
         [] => {}
-        _ => return Err(ambiguous_symbol(krate, name, &glob_matches)),
+        _ => {
+            return Err(ambiguous_symbol(
+                krate,
+                name,
+                &glob_matches.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            ));
+        }
+    }
+
+    if local_private_namespaces != 0 {
+        return Err(SymbolError::NotFound(format!(
+            "'{name}' is private under {}",
+            path_label(krate, module_id)
+        )));
     }
 
     let mut message = format!("'{name}' not found under {}", path_label(krate, module_id));
@@ -1013,19 +1054,28 @@ fn has_private_type_binding(
     children: &[Id],
     name: &str,
 ) -> Result<bool, SymbolError> {
+    Ok(private_binding_namespaces(krate, children, name)? & TYPE_NAMESPACE != 0)
+}
+
+fn private_binding_namespaces(
+    krate: &Crate,
+    children: &[Id],
+    name: &str,
+) -> Result<u8, SymbolError> {
+    let mut namespaces = 0;
     for id in children {
         let child = item(krate, *id)?;
         if is_cfg_available(child)
             && !is_public(child)
+            && !matches!(&child.inner, ItemEnum::Use(use_item) if use_item.is_glob)
             && exported_name(child)
                 .as_deref()
                 .is_some_and(|exported| identifier_key(exported) == identifier_key(name))
-            && item_namespaces(krate, *id)? & TYPE_NAMESPACE != 0
         {
-            return Ok(true);
+            namespaces |= item_namespaces(krate, *id)?;
         }
     }
-    Ok(false)
+    Ok(namespaces)
 }
 
 fn direct_matching_children(
@@ -1038,6 +1088,7 @@ fn direct_matching_children(
     for child_id in children {
         let child = item(krate, *child_id)?;
         if is_public(child)
+            && !matches!(&child.inner, ItemEnum::Use(use_item) if use_item.is_glob)
             && exported_name(child)
                 .as_deref()
                 .is_some_and(|exported| identifier_key(exported) == identifier_key(name))
@@ -3057,7 +3108,7 @@ mod tests {
                 }
             )
             .unwrap_err()
-            .contains("not found")
+            .contains("private")
         );
         assert!(
             find_symbol(
@@ -3890,6 +3941,197 @@ mod tests {
         )
         .unwrap();
         assert_eq!(shadowed.imported.definition, "pub struct Same;");
+    }
+
+    #[test]
+    fn private_bindings_shadow_globs_only_in_their_namespaces() {
+        let root = item(
+            1,
+            Some("fixture"),
+            Visibility::Public,
+            ItemEnum::Module(Module {
+                is_crate: true,
+                items: vec![
+                    Id(2),
+                    Id(3),
+                    Id(6),
+                    Id(7),
+                    Id(8),
+                    Id(10),
+                    Id(11),
+                    Id(14),
+                    Id(17),
+                ],
+                is_stripped: false,
+            }),
+        );
+        let donor = item(
+            2,
+            Some("donor"),
+            Visibility::Public,
+            ItemEnum::Module(Module {
+                is_crate: false,
+                items: vec![Id(4), Id(5), Id(9), Id(12), Id(15), Id(16), Id(18)],
+                is_stripped: false,
+            }),
+        );
+        let glob = item(
+            3,
+            Some("glob"),
+            Visibility::Public,
+            ItemEnum::Use(Use {
+                source: "donor::*".into(),
+                name: "glob".into(),
+                id: Some(Id(2)),
+                is_glob: true,
+            }),
+        );
+        let public_type = item(
+            4,
+            Some("Thing"),
+            Visibility::Public,
+            ItemEnum::TypeAlias(TypeAlias {
+                type_: Type::Primitive("u8".into()),
+                generics: generics_empty(),
+            }),
+        );
+        let public_value = item(
+            5,
+            Some("action"),
+            Visibility::Public,
+            ItemEnum::Function(function()),
+        );
+        let private_type = item(
+            6,
+            Some("Thing"),
+            Visibility::Crate,
+            ItemEnum::TypeAlias(TypeAlias {
+                type_: Type::Primitive("u16".into()),
+                generics: generics_empty(),
+            }),
+        );
+        let private_value = item(
+            7,
+            Some("action"),
+            Visibility::Crate,
+            ItemEnum::Function(function()),
+        );
+        let private_other_namespace = item(
+            8,
+            Some("Marker"),
+            Visibility::Crate,
+            ItemEnum::Function(function()),
+        );
+        let public_macro = item(
+            9,
+            Some("Marker"),
+            Visibility::Public,
+            ItemEnum::Macro("macro_rules! Marker { () => {}; }".into()),
+        );
+        let direct_type = item(
+            10,
+            Some("Same"),
+            Visibility::Public,
+            ItemEnum::TypeAlias(TypeAlias {
+                type_: Type::Primitive("u8".into()),
+                generics: generics_empty(),
+            }),
+        );
+        let private_same_value = item(
+            11,
+            Some("Same"),
+            Visibility::Crate,
+            ItemEnum::Function(function()),
+        );
+        let glob_same = item(
+            12,
+            Some("Same"),
+            Visibility::Public,
+            ItemEnum::Struct(Struct {
+                kind: StructKind::Unit,
+                generics: generics_empty(),
+                impls: vec![],
+            }),
+        );
+        let private_split_value = item(
+            14,
+            Some("Split"),
+            Visibility::Crate,
+            ItemEnum::Function(function()),
+        );
+        let public_split_type = item(
+            15,
+            Some("Split"),
+            Visibility::Public,
+            ItemEnum::TypeAlias(TypeAlias {
+                type_: Type::Primitive("u32".into()),
+                generics: generics_empty(),
+            }),
+        );
+        let public_split_value = item(
+            16,
+            Some("Split"),
+            Visibility::Public,
+            ItemEnum::Function(function()),
+        );
+        let mut disabled_private_value = item(
+            17,
+            Some("Available"),
+            Visibility::Crate,
+            ItemEnum::Function(function()),
+        );
+        disabled_private_value.attrs.push(Attribute::Other(
+            crate::rustdoc_json::CFG_UNAVAILABLE_ATTRIBUTE.into(),
+        ));
+        let public_available_value = item(
+            18,
+            Some("Available"),
+            Visibility::Public,
+            ItemEnum::Function(function()),
+        );
+        let docs = krate(
+            vec![
+                root,
+                donor,
+                glob,
+                public_type,
+                public_value,
+                private_type,
+                private_value,
+                private_other_namespace,
+                public_macro,
+                direct_type,
+                private_same_value,
+                glob_same,
+                private_split_value,
+                public_split_type,
+                public_split_value,
+                disabled_private_value,
+                public_available_value,
+            ],
+            Id(1),
+        );
+
+        for name in ["Thing", "action"] {
+            let error = find_child(&docs, Id(1), name, None, &mut HashSet::new()).unwrap_err();
+            assert!(error.contains(&format!("'{name}' is private")), "{error}");
+        }
+        assert_eq!(
+            find_child(&docs, Id(1), "Marker", None, &mut HashSet::new()).unwrap(),
+            Id(9)
+        );
+        assert_eq!(
+            find_child(&docs, Id(1), "Same", None, &mut HashSet::new()).unwrap(),
+            Id(10)
+        );
+        assert_eq!(
+            find_child(&docs, Id(1), "Split", None, &mut HashSet::new()).unwrap(),
+            Id(15)
+        );
+        assert_eq!(
+            find_child(&docs, Id(1), "Available", None, &mut HashSet::new()).unwrap(),
+            Id(18)
+        );
     }
 
     #[test]

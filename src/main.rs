@@ -426,50 +426,6 @@ fn resolve_query(
         package_id: package.id.to_string(),
         graph_index: selected_docs.unit.graph_index,
     };
-    let local_result = symbols::find_symbol_report(&krate, import);
-    if let Err(SymbolError::Ambiguous(message)) = &local_result {
-        return Err(QueryError::Incomplete(format!(
-            "ambiguous import '{}' in {} {}: {message}",
-            import.full_path(),
-            package.name,
-            package.version
-        )));
-    }
-    let external_candidates = symbols::external_reexports(&krate, import).map_err(|error| {
-        QueryError::Incomplete(match &local_result {
-            Ok(_) => format!("failed to inspect external re-export graph: {error}"),
-            Err(local_error) => {
-                format!("{local_error}; failed to inspect external re-export graph: {error}")
-            }
-        })
-    })?;
-    if external_candidates.is_empty() {
-        return match local_result {
-            Ok(symbols) => Ok(ResolvedQuery {
-                symbols,
-                crate_name: package.name.clone(),
-                version: package.version.to_string(),
-                contexts,
-                target_triple: krate.target.triple.clone(),
-                json_path,
-            }),
-            Err(local_error) => {
-                let message = not_found_message(
-                    import,
-                    &package.name,
-                    Some(&package.version.to_string()),
-                    &json_path,
-                    Some(&local_error),
-                );
-                if matches!(local_error, SymbolError::NotFound(_)) {
-                    Err(QueryError::Absent(message))
-                } else {
-                    Err(QueryError::Incomplete(message))
-                }
-            }
-        };
-    }
-
     // Only the user's path must be externally importable. Recursive routes may
     // contain private canonical modules exposed by a public re-export.
     let is_root_query = visited.len() == 1;
@@ -494,6 +450,52 @@ fn resolve_query(
             }
         })
     };
+    let local_result = symbols::find_symbol_report(&krate, import);
+    if let Err(SymbolError::Ambiguous(message)) = &local_result {
+        return Err(QueryError::Incomplete(format!(
+            "ambiguous import '{}' in {} {}: {message}",
+            import.full_path(),
+            package.name,
+            package.version
+        )));
+    }
+    let external_candidates = symbols::external_reexports(&krate, import).map_err(|error| {
+        QueryError::Incomplete(match &local_result {
+            Ok(_) => format!("failed to inspect external re-export graph: {error}"),
+            Err(local_error) => {
+                format!("{local_error}; failed to inspect external re-export graph: {error}")
+            }
+        })
+    })?;
+    if external_candidates.is_empty() {
+        return match local_result {
+            Ok(symbols) => {
+                validate_candidate()?;
+                Ok(ResolvedQuery {
+                    symbols,
+                    crate_name: package.name.clone(),
+                    version: package.version.to_string(),
+                    contexts,
+                    target_triple: krate.target.triple.clone(),
+                    json_path,
+                })
+            }
+            Err(local_error) => {
+                let message = not_found_message(
+                    import,
+                    &package.name,
+                    Some(&package.version.to_string()),
+                    &json_path,
+                    Some(&local_error),
+                );
+                if matches!(local_error, SymbolError::NotFound(_)) {
+                    Err(QueryError::Absent(message))
+                } else {
+                    Err(QueryError::Incomplete(message))
+                }
+            }
+        };
+    }
 
     let mut successes = Vec::new();
     let mut absent_branch_errors = Vec::new();
