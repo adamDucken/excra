@@ -83,7 +83,7 @@ pub trait Contract {
         String::from_utf8_lossy(&lock.stderr)
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::{Limits, Choice, Contract};",
             "--root",

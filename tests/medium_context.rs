@@ -44,7 +44,7 @@ mod tests {
         let wrapper = workspace.path().join("required-env-wrapper.sh");
         fs::write(
             &wrapper,
-            "#!/bin/sh\n[ \"$CHECK_DOCS_WRAPPER_CONTEXT\" = cargo-only ] || exit 41\ncase \"$*\" in *'--crate-name origin'*) [ \"$CARGO_PKG_NAME\" = origin ] || exit 42;; *'--crate-name facade'*) [ \"$CARGO_PKG_NAME\" = facade ] || exit 43;; esac\nprintf '%s\\n' \"$*\" >> \"$CHECK_DOCS_WRAPPER_LOG\"\nexec \"$@\"\n",
+            "#!/bin/sh\n[ \"$EXCRA_WRAPPER_CONTEXT\" = cargo-only ] || exit 41\ncase \"$*\" in *'--crate-name origin'*) [ \"$CARGO_PKG_NAME\" = origin ] || exit 42;; *'--crate-name facade'*) [ \"$CARGO_PKG_NAME\" = facade ] || exit 43;; esac\nprintf '%s\\n' \"$*\" >> \"$EXCRA_WRAPPER_LOG\"\nexec \"$@\"\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
@@ -54,7 +54,7 @@ mod tests {
         fs::write(
             workspace.path().join(".cargo/config.toml"),
             format!(
-                "[build]\nrustc-wrapper = {:?}\n\n[env]\nCHECK_DOCS_WRAPPER_CONTEXT = {{ value = \"cargo-only\", force = true }}\nCHECK_DOCS_WRAPPER_LOG = {{ value = {:?}, force = true }}\n",
+                "[build]\nrustc-wrapper = {:?}\n\n[env]\nEXCRA_WRAPPER_CONTEXT = {{ value = \"cargo-only\", force = true }}\nEXCRA_WRAPPER_LOG = {{ value = {:?}, force = true }}\n",
                 wrapper.to_str().unwrap(),
                 wrapper_log.to_str().unwrap(),
             ),
@@ -71,14 +71,14 @@ mod tests {
             String::from_utf8_lossy(&lock.stderr)
         );
 
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 "use facade::Thing;",
                 "--root",
                 workspace.path().join("app").to_str().unwrap(),
             ])
-            .env_remove("CHECK_DOCS_WRAPPER_CONTEXT")
-            .env_remove("CHECK_DOCS_WRAPPER_LOG")
+            .env_remove("EXCRA_WRAPPER_CONTEXT")
+            .env_remove("EXCRA_WRAPPER_LOG")
             .env_remove("RUSTC_WRAPPER")
             .env_remove("CARGO_BUILD_RUSTC_WRAPPER")
             .env("CARGO_TARGET_DIR", workspace.path().join("target"))
@@ -128,7 +128,7 @@ mod tests {
         assert!(
             !fs::read_to_string(wrapper_log)
                 .unwrap()
-                .contains("check_docs_import_probe")
+                .contains("excra_import_probe")
         );
     }
 
@@ -273,7 +273,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(shared_units.len(), 2, "{graph}");
 
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 "use facade::Thing;",
                 "--root",

@@ -50,7 +50,7 @@ fn lock(workspace: &TempDir) {
 }
 
 fn query(workspace: &TempDir, import: &str) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    Command::new(env!("CARGO_BIN_EXE_excra"))
         .env("CARGO_TARGET_DIR", workspace.path().join("target"))
         .args([
             import,
@@ -184,7 +184,7 @@ fn module_and_extern_aliases_retain_the_cargo_dependency_name() {
                 &fs::read(
                     workspace
                         .path()
-                        .join("target/check-docs/generation/unit-0/doc/facade.json"),
+                        .join("target/excra/generation/unit-0/doc/facade.json"),
                 )
                 .unwrap(),
             )

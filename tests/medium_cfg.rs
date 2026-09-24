@@ -35,7 +35,7 @@ fn workspace(source: &str) -> TempDir {
 }
 
 fn query(workspace: &TempDir, options: &[&str]) -> String {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use dep::S;", "--root"])
         .arg(workspace.path())
         .args(["--package", "app"])

@@ -14,11 +14,11 @@ use std::time::{Duration, Instant};
 use syn::parse::Parser;
 
 const PINNED_TOOLCHAIN: &str = "nightly-2025-09-10";
-const GENERATION_MARKER: &str = "check-docs managed generation\n";
-pub(crate) const CFG_UNAVAILABLE_ATTRIBUTE: &str = "#[check_docs_cfg_unavailable]";
+const GENERATION_MARKER: &str = "excra managed generation\n";
+pub(crate) const CFG_UNAVAILABLE_ATTRIBUTE: &str = "#[excra_cfg_unavailable]";
 
 pub(crate) fn selected_toolchain() -> String {
-    env::var("CHECK_DOCS_TOOLCHAIN").unwrap_or_else(|_| PINNED_TOOLCHAIN.to_string())
+    env::var("EXCRA_TOOLCHAIN").unwrap_or_else(|_| PINNED_TOOLCHAIN.to_string())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,11 +154,11 @@ fn prepare_generation_root(target_directory: &Path) -> Result<PathBuf, String> {
             target_directory.display()
         )
     })?;
-    let generation_root = target_directory.join("check-docs");
+    let generation_root = target_directory.join("excra");
     match fs::symlink_metadata(&generation_root) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
             return Err(format!(
-                "refusing to use non-directory or symlink check-docs managed root {}",
+                "refusing to use non-directory or symlink excra managed root {}",
                 generation_root.display()
             ));
         }
@@ -167,19 +167,19 @@ fn prepare_generation_root(target_directory: &Path) -> Result<PathBuf, String> {
             if let Err(err) = fs::create_dir(&generation_root) {
                 if err.kind() != std::io::ErrorKind::AlreadyExists {
                     return Err(format!(
-                        "failed to create check-docs managed root {}: {err}",
+                        "failed to create excra managed root {}: {err}",
                         generation_root.display()
                     ));
                 }
                 let metadata = fs::symlink_metadata(&generation_root).map_err(|err| {
                     format!(
-                        "failed to inspect concurrently created check-docs managed root {}: {err}",
+                        "failed to inspect concurrently created excra managed root {}: {err}",
                         generation_root.display()
                     )
                 })?;
                 if metadata.file_type().is_symlink() || !metadata.is_dir() {
                     return Err(format!(
-                        "refusing to use non-directory or symlink check-docs managed root {}",
+                        "refusing to use non-directory or symlink excra managed root {}",
                         generation_root.display()
                     ));
                 }
@@ -187,20 +187,20 @@ fn prepare_generation_root(target_directory: &Path) -> Result<PathBuf, String> {
         }
         Err(err) => {
             return Err(format!(
-                "failed to inspect check-docs managed root {}: {err}",
+                "failed to inspect excra managed root {}: {err}",
                 generation_root.display()
             ));
         }
     }
     let resolved_root = generation_root.canonicalize().map_err(|err| {
         format!(
-            "failed to resolve check-docs managed root {}: {err}",
+            "failed to resolve excra managed root {}: {err}",
             generation_root.display()
         )
     })?;
     if resolved_root.parent() != Some(target_directory.as_path()) {
         return Err(format!(
-            "refusing to use check-docs managed root {} outside Cargo target directory {}",
+            "refusing to use excra managed root {} outside Cargo target directory {}",
             resolved_root.display(),
             target_directory.display()
         ));
@@ -211,7 +211,7 @@ fn prepare_generation_root(target_directory: &Path) -> Result<PathBuf, String> {
 fn reset_generation_target_dir(generation_root: &Path) -> Result<PathBuf, String> {
     fs::create_dir_all(generation_root).map_err(|err| {
         format!(
-            "failed to create check-docs generation root {}: {err}",
+            "failed to create excra generation root {}: {err}",
             generation_root.display()
         )
     })?;
@@ -220,35 +220,35 @@ fn reset_generation_target_dir(generation_root: &Path) -> Result<PathBuf, String
         Ok(metadata) => {
             if !metadata.is_dir() || metadata.file_type().is_symlink() {
                 return Err(format!(
-                    "refusing to replace unowned check-docs generation path {}",
+                    "refusing to replace unowned excra generation path {}",
                     target_dir.display()
                 ));
             }
-            let marker = target_dir.join(".check-docs-generation");
+            let marker = target_dir.join(".excra-generation");
             let marker_metadata = fs::symlink_metadata(&marker).map_err(|err| {
                 format!(
-                    "refusing to replace unowned check-docs generation directory {}: failed to inspect ownership marker {}: {err}",
+                    "refusing to replace unowned excra generation directory {}: failed to inspect ownership marker {}: {err}",
                     target_dir.display(),
                     marker.display()
                 )
             })?;
             if marker_metadata.file_type().is_symlink() || !marker_metadata.is_file() {
                 return Err(format!(
-                    "refusing to replace unowned check-docs generation directory {}: ownership marker {} is not a regular non-symlink file",
+                    "refusing to replace unowned excra generation directory {}: ownership marker {} is not a regular non-symlink file",
                     target_dir.display(),
                     marker.display()
                 ));
             }
             let contents = fs::read_to_string(&marker).map_err(|err| {
                 format!(
-                    "refusing to replace unowned check-docs generation directory {}: failed to read ownership marker {}: {err}",
+                    "refusing to replace unowned excra generation directory {}: failed to read ownership marker {}: {err}",
                     target_dir.display(),
                     marker.display()
                 )
             })?;
             if contents != GENERATION_MARKER {
                 return Err(format!(
-                    "refusing to replace unowned check-docs generation directory {}: invalid ownership marker",
+                    "refusing to replace unowned excra generation directory {}: invalid ownership marker",
                     target_dir.display()
                 ));
             }
@@ -268,14 +268,14 @@ fn reset_generation_target_dir(generation_root: &Path) -> Result<PathBuf, String
     if target_exists {
         fs::remove_dir_all(&target_dir).map_err(|err| {
             format!(
-                "failed to reset managed check-docs generation directory {}: {err}",
+                "failed to reset managed excra generation directory {}: {err}",
                 target_dir.display()
             )
         })?;
     }
     fs::rename(&staging, &target_dir).map_err(|err| {
         format!(
-            "failed to atomically install managed check-docs generation directory {} from {}: {err}",
+            "failed to atomically install managed excra generation directory {} from {}: {err}",
             target_dir.display(),
             staging.display()
         )
@@ -286,14 +286,14 @@ fn reset_generation_target_dir(generation_root: &Path) -> Result<PathBuf, String
 fn cleanup_owned_generation_staging(generation_root: &Path) -> Result<(), String> {
     let entries = fs::read_dir(generation_root).map_err(|err| {
         format!(
-            "failed to inspect check-docs generation root {}: {err}",
+            "failed to inspect excra generation root {}: {err}",
             generation_root.display()
         )
     })?;
     for entry in entries {
         let entry = entry.map_err(|err| {
             format!(
-                "failed to inspect an entry in check-docs generation root {}: {err}",
+                "failed to inspect an entry in excra generation root {}: {err}",
                 generation_root.display()
             )
         })?;
@@ -308,7 +308,7 @@ fn cleanup_owned_generation_staging(generation_root: &Path) -> Result<(), String
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             continue;
         }
-        let marker = path.join(".check-docs-generation");
+        let marker = path.join(".excra-generation");
         let Ok(marker_metadata) = fs::symlink_metadata(&marker) else {
             continue;
         };
@@ -333,10 +333,8 @@ fn create_marked_generation_staging(generation_root: &Path) -> Result<PathBuf, S
         let staging = generation_root.join(format!("generation.staging-{index}"));
         match fs::create_dir(&staging) {
             Ok(()) => {
-                if let Err(err) =
-                    fs::write(staging.join(".check-docs-generation"), GENERATION_MARKER)
-                {
-                    let _ = fs::remove_file(staging.join(".check-docs-generation"));
+                if let Err(err) = fs::write(staging.join(".excra-generation"), GENERATION_MARKER) {
+                    let _ = fs::remove_file(staging.join(".excra-generation"));
                     let _ = fs::remove_dir(&staging);
                     return Err(format!(
                         "failed to write ownership marker in generation staging directory {}: {err}",
@@ -1011,18 +1009,18 @@ fn generate_json_with_toolchain(
         command.args(["--target", target_triple]);
     }
     let current_exe = env::current_exe()
-        .map_err(|err| format!("failed to locate check-docs executable for Rustdoc: {err}"))?;
+        .map_err(|err| format!("failed to locate excra executable for Rustdoc: {err}"))?;
     command
         .env("RUSTC_WRAPPER", current_exe)
-        .env_remove("CHECK_DOCS_ORIGINAL_RUSTC_WRAPPER")
-        .env("CHECK_DOCS_RUSTC_WRAPPER_MODE", "1")
-        .env("CHECK_DOCS_WRAPPER_PACKAGE_NAME", &request.package.name)
+        .env_remove("EXCRA_ORIGINAL_RUSTC_WRAPPER")
+        .env("EXCRA_RUSTC_WRAPPER_MODE", "1")
+        .env("EXCRA_WRAPPER_PACKAGE_NAME", &request.package.name)
         .env(
-            "CHECK_DOCS_WRAPPER_PACKAGE_VERSION",
+            "EXCRA_WRAPPER_PACKAGE_VERSION",
             request.package.version.to_string(),
         )
         .env(
-            "CHECK_DOCS_WRAPPER_MANIFEST_DIR",
+            "EXCRA_WRAPPER_MANIFEST_DIR",
             request
                 .package
                 .manifest_path
@@ -1030,34 +1028,31 @@ fn generate_json_with_toolchain(
                 .expect("package manifest has parent")
                 .as_std_path(),
         )
-        .env("CHECK_DOCS_WRAPPER_TARGET_NAME", &request.target.name)
+        .env("EXCRA_WRAPPER_TARGET_NAME", &request.target.name)
         .env(
-            "CHECK_DOCS_WRAPPER_FEATURES",
+            "EXCRA_WRAPPER_FEATURES",
             serde_json::to_string(&request.unit.features).expect("feature names serialize"),
         )
-        .env("CHECK_DOCS_WRAPPER_UNIT_MODE", &request.unit.mode)
+        .env("EXCRA_WRAPPER_UNIT_MODE", &request.unit.mode)
         .env(
-            "CHECK_DOCS_WRAPPER_UNIT_PLATFORM",
+            "EXCRA_WRAPPER_UNIT_PLATFORM",
             serde_json::to_string(&request.unit.platform).expect("unit platform serializes"),
         )
-        .env("CHECK_DOCS_WRAPPER_UNIT_PROFILE", &request.unit.profile)
+        .env("EXCRA_WRAPPER_UNIT_PROFILE", &request.unit.profile)
+        .env("EXCRA_WRAPPER_TARGET_DEFAULT_PANIC", target_default_panic)
         .env(
-            "CHECK_DOCS_WRAPPER_TARGET_DEFAULT_PANIC",
-            target_default_panic,
-        )
-        .env(
-            "CHECK_DOCS_WRAPPER_CFG_PATH",
+            "EXCRA_WRAPPER_CFG_PATH",
             doc_dir.join(format!("{}.cfg", request.target.name.replace('-', "_"))),
         )
-        .env("CHECK_DOCS_WRAPPER_DOC_DIR", doc_dir);
+        .env("EXCRA_WRAPPER_DOC_DIR", doc_dir);
     if let Some(wrapper) = original_rustc_wrapper {
-        command.env("CHECK_DOCS_ORIGINAL_RUSTC_WRAPPER", wrapper);
+        command.env("EXCRA_ORIGINAL_RUSTC_WRAPPER", wrapper);
     }
     let output = command
         .output()
         .map_err(|err| {
             format!(
-                "failed to run cargo +{toolchain} rustdoc for {} {}: {err}; install it with `rustup toolchain install {toolchain}` or set CHECK_DOCS_TOOLCHAIN",
+                "failed to run cargo +{toolchain} rustdoc for {} {}: {err}; install it with `rustup toolchain install {toolchain}` or set EXCRA_TOOLCHAIN",
                 request.package.name, request.package.version
             )
         })?;
@@ -1157,7 +1152,7 @@ fn save_import_probe(
         index += 1;
     }
     probe_arguments.push("--extern".into());
-    let mut external = OsString::from("check_docs_dependency=");
+    let mut external = OsString::from("excra_dependency=");
     external.push(artifact);
     probe_arguments.push(external);
     let probe = ImportProbe {
@@ -1185,10 +1180,7 @@ pub(crate) fn validate_import(
     }
     fs::write(
         &source,
-        format!(
-            "#![no_std]\nuse check_docs_dependency::{};\n",
-            parts.join("::")
-        ),
+        format!("#![no_std]\nuse excra_dependency::{};\n", parts.join("::")),
     )
     .map_err(|error| error.to_string())?;
     let output = Command::new(&probe.compiler[0])
@@ -1197,7 +1189,7 @@ pub(crate) fn validate_import(
         .args(&probe.arguments)
         .args([
             "--edition=2024",
-            "--crate-name=check_docs_import_probe",
+            "--crate-name=excra_import_probe",
             "--crate-type=lib",
             "--emit=metadata",
             "--cap-lints=allow",
@@ -1217,10 +1209,10 @@ pub(crate) fn validate_import(
 pub(crate) fn run_rustc_wrapper() -> ! {
     let command_arguments = env::args_os().skip(1).collect::<Vec<_>>();
     let Some(compiler) = command_arguments.first() else {
-        eprintln!("check-docs Rust compiler wrapper was not given a compiler executable");
+        eprintln!("excra Rust compiler wrapper was not given a compiler executable");
         std::process::exit(1);
     };
-    let original_wrapper = env::var_os("CHECK_DOCS_ORIGINAL_RUSTC_WRAPPER");
+    let original_wrapper = env::var_os("EXCRA_ORIGINAL_RUSTC_WRAPPER");
     let mut compile = if let Some(wrapper) = &original_wrapper {
         let mut command = Command::new(wrapper);
         command.arg(compiler);
@@ -1232,7 +1224,7 @@ pub(crate) fn run_rustc_wrapper() -> ! {
         .args(&command_arguments[1..])
         .status()
         .unwrap_or_else(|err| {
-            eprintln!("check-docs Rust compiler wrapper failed to run rustc: {err}");
+            eprintln!("excra Rust compiler wrapper failed to run rustc: {err}");
             std::process::exit(1);
         });
     if !status.success() {
@@ -1261,12 +1253,12 @@ pub(crate) fn run_rustc_wrapper() -> ! {
             .arg("--print=cfg")
             .output()
             .unwrap_or_else(|err| {
-                eprintln!("check-docs Rust compiler wrapper failed to inspect rustc cfgs: {err}");
+                eprintln!("excra Rust compiler wrapper failed to inspect rustc cfgs: {err}");
                 std::process::exit(1);
             });
         if !cfg_output.status.success() {
             eprintln!(
-                "check-docs Rust compiler wrapper failed to inspect rustc cfgs: {}",
+                "excra Rust compiler wrapper failed to inspect rustc cfgs: {}",
                 String::from_utf8_lossy(&cfg_output.stderr).trim()
             );
             std::process::exit(cfg_output.status.code().unwrap_or(1));
@@ -1280,24 +1272,24 @@ pub(crate) fn run_rustc_wrapper() -> ! {
     // Item filtering must still see the effective cfgs, including user overrides.
     let cfg_output = print_cfg(invocation.arguments);
 
-    let Some(doc_dir) = env::var_os("CHECK_DOCS_WRAPPER_DOC_DIR").map(PathBuf::from) else {
-        eprintln!("check-docs Rust compiler wrapper is missing its Rustdoc output directory");
+    let Some(doc_dir) = env::var_os("EXCRA_WRAPPER_DOC_DIR").map(PathBuf::from) else {
+        eprintln!("excra Rust compiler wrapper is missing its Rustdoc output directory");
         std::process::exit(1);
     };
     if let Err(err) = fs::create_dir_all(&doc_dir) {
         eprintln!(
-            "check-docs Rust compiler wrapper failed to create {}: {err}",
+            "excra Rust compiler wrapper failed to create {}: {err}",
             doc_dir.display()
         );
         std::process::exit(1);
     }
-    let Some(cfg_path) = env::var_os("CHECK_DOCS_WRAPPER_CFG_PATH").map(PathBuf::from) else {
-        eprintln!("check-docs Rust compiler wrapper is missing its rustc cfg output path");
+    let Some(cfg_path) = env::var_os("EXCRA_WRAPPER_CFG_PATH").map(PathBuf::from) else {
+        eprintln!("excra Rust compiler wrapper is missing its rustc cfg output path");
         std::process::exit(1);
     };
     if let Err(err) = fs::write(&cfg_path, &cfg_output.stdout) {
         eprintln!(
-            "check-docs Rust compiler wrapper failed to write {}: {err}",
+            "excra Rust compiler wrapper failed to write {}: {err}",
             cfg_path.display()
         );
         std::process::exit(1);
@@ -1312,7 +1304,7 @@ pub(crate) fn run_rustc_wrapper() -> ! {
         invocation.arguments,
         &cfg_path.with_extension("probe"),
     ) {
-        eprintln!("check-docs failed to retain the selected compiler artifact: {error}");
+        eprintln!("excra failed to retain the selected compiler artifact: {error}");
         std::process::exit(1);
     }
     let mut rustdoc = PathBuf::from(invocation.rustc);
@@ -1354,7 +1346,7 @@ pub(crate) fn run_rustc_wrapper() -> ! {
         .status()
         .unwrap_or_else(|err| {
             eprintln!(
-                "check-docs Rust compiler wrapper failed to run {}: {err}",
+                "excra Rust compiler wrapper failed to run {}: {err}",
                 rustdoc.display()
             );
             std::process::exit(1);
@@ -1402,9 +1394,9 @@ fn rustc_invocation(arguments: &[OsString]) -> RustcInvocation<'_> {
 }
 
 fn wrapper_matches_selected_unit(arguments: &[OsString]) -> bool {
-    let expected_name = env::var("CHECK_DOCS_WRAPPER_PACKAGE_NAME").ok();
-    let expected_version = env::var("CHECK_DOCS_WRAPPER_PACKAGE_VERSION").ok();
-    let expected_manifest_dir = env::var_os("CHECK_DOCS_WRAPPER_MANIFEST_DIR");
+    let expected_name = env::var("EXCRA_WRAPPER_PACKAGE_NAME").ok();
+    let expected_version = env::var("EXCRA_WRAPPER_PACKAGE_VERSION").ok();
+    let expected_manifest_dir = env::var_os("EXCRA_WRAPPER_MANIFEST_DIR");
     if expected_name.as_deref() != env::var("CARGO_PKG_NAME").ok().as_deref()
         || expected_version.as_deref() != env::var("CARGO_PKG_VERSION").ok().as_deref()
         || expected_manifest_dir.as_deref() != env::var_os("CARGO_MANIFEST_DIR").as_deref()
@@ -1415,18 +1407,18 @@ fn wrapper_matches_selected_unit(arguments: &[OsString]) -> bool {
         .iter()
         .map(|argument| argument.to_string_lossy())
         .collect::<Vec<_>>();
-    let expected_target = env::var("CHECK_DOCS_WRAPPER_TARGET_NAME")
+    let expected_target = env::var("EXCRA_WRAPPER_TARGET_NAME")
         .unwrap_or_default()
         .replace('-', "_");
     if argument_value(&arguments, "--crate-name") != Some(expected_target.as_str()) {
         return false;
     }
 
-    let expected_mode = env::var("CHECK_DOCS_WRAPPER_UNIT_MODE").unwrap_or_default();
+    let expected_mode = env::var("EXCRA_WRAPPER_UNIT_MODE").unwrap_or_default();
     if rustc_compile_mode(&arguments) != Some(expected_mode.as_str()) {
         return false;
     }
-    let expected_platform = env::var("CHECK_DOCS_WRAPPER_UNIT_PLATFORM")
+    let expected_platform = env::var("EXCRA_WRAPPER_UNIT_PLATFORM")
         .ok()
         .and_then(|platform| serde_json::from_str::<Option<String>>(&platform).ok())
         .flatten();
@@ -1450,7 +1442,7 @@ fn wrapper_matches_selected_unit(arguments: &[OsString]) -> bool {
     }
     actual_features.sort();
     actual_features.dedup();
-    let mut expected_features = env::var("CHECK_DOCS_WRAPPER_FEATURES")
+    let mut expected_features = env::var("EXCRA_WRAPPER_FEATURES")
         .ok()
         .and_then(|features| serde_json::from_str::<Vec<String>>(&features).ok())
         .unwrap_or_default();
@@ -1468,13 +1460,13 @@ fn cargo_profile_arguments(arguments: &[OsString]) -> &[OsString] {
 }
 
 fn profile_matches_selected_unit(cfg: &RustcCfg, arguments: &[OsString]) -> bool {
-    let Some(profile) = env::var("CHECK_DOCS_WRAPPER_UNIT_PROFILE")
+    let Some(profile) = env::var("EXCRA_WRAPPER_UNIT_PROFILE")
         .ok()
         .and_then(|profile| serde_json::from_str::<serde_json::Value>(&profile).ok())
     else {
         return false;
     };
-    let Ok(target_default_panic) = env::var("CHECK_DOCS_WRAPPER_TARGET_DEFAULT_PANIC") else {
+    let Ok(target_default_panic) = env::var("EXCRA_WRAPPER_TARGET_DEFAULT_PANIC") else {
         return false;
     };
     let arguments = arguments
@@ -2311,7 +2303,7 @@ fn handle_generate_output(
 fn format_generate_error(package: &Package, toolchain: &str, stderr: &str) -> String {
     let hint = if is_missing_toolchain_diagnostic(stderr) {
         format!(
-            "; compatible nightly toolchain not found; install with `rustup toolchain install {toolchain}` or set CHECK_DOCS_TOOLCHAIN"
+            "; compatible nightly toolchain not found; install with `rustup toolchain install {toolchain}` or set EXCRA_TOOLCHAIN"
         )
     } else if stderr.contains("lock file") && stderr.contains("needs to be updated") {
         "; Cargo.lock is missing or stale; run `cargo check` or `cargo build` to refresh it, then retry".to_string()
@@ -2488,7 +2480,7 @@ mod tests {
         assert_eq!(
             err,
             format!(
-                "failed to generate rustdoc JSON for {} {}; compatible nightly toolchain not found; install with `rustup toolchain install nightly` or set CHECK_DOCS_TOOLCHAIN: toolchain 'nightly' is not installed",
+                "failed to generate rustdoc JSON for {} {}; compatible nightly toolchain not found; install with `rustup toolchain install nightly` or set EXCRA_TOOLCHAIN: toolchain 'nightly' is not installed",
                 pkg.name, pkg.version
             )
         );
@@ -2598,13 +2590,10 @@ mod tests {
             &request,
             output.path(),
             output.path(),
-            "definitely_missing_check_docs_toolchain",
+            "definitely_missing_excra_toolchain",
         )
         .unwrap_err();
-        assert!(
-            err.contains("definitely_missing_check_docs_toolchain"),
-            "{err}"
-        );
+        assert!(err.contains("definitely_missing_excra_toolchain"), "{err}");
     }
 
     #[test]
@@ -2942,7 +2931,7 @@ mod tests {
     #[test]
     fn generation_directory_requires_and_refreshes_its_ownership_marker() {
         let temp = tempfile::TempDir::new().unwrap();
-        let root = temp.path().join("check-docs");
+        let root = temp.path().join("excra");
         let first = reset_generation_target_dir(&root).unwrap();
         fs::write(first.join("stale"), "stale").unwrap();
 
@@ -2950,11 +2939,11 @@ mod tests {
         assert_eq!(first, second);
         assert!(!second.join("stale").exists());
         assert_eq!(
-            fs::read_to_string(second.join(".check-docs-generation")).unwrap(),
+            fs::read_to_string(second.join(".excra-generation")).unwrap(),
             GENERATION_MARKER
         );
 
-        fs::write(second.join(".check-docs-generation"), "not ours\n").unwrap();
+        fs::write(second.join(".excra-generation"), "not ours\n").unwrap();
         assert!(
             reset_generation_target_dir(&root)
                 .unwrap_err()
@@ -2965,20 +2954,20 @@ mod tests {
     #[test]
     fn generation_directory_recovers_past_interrupted_staging_initialization() {
         let temp = tempfile::TempDir::new().unwrap();
-        let root = temp.path().join("check-docs");
+        let root = temp.path().join("excra");
         fs::create_dir_all(&root).unwrap();
         let unmarked = root.join("generation.staging-0");
         fs::create_dir(&unmarked).unwrap();
         fs::write(unmarked.join("keep.txt"), "not owned\n").unwrap();
         let owned = root.join("generation.staging-1");
         fs::create_dir(&owned).unwrap();
-        fs::write(owned.join(".check-docs-generation"), GENERATION_MARKER).unwrap();
+        fs::write(owned.join(".excra-generation"), GENERATION_MARKER).unwrap();
         fs::write(owned.join("stale"), "stale\n").unwrap();
 
         let generation = reset_generation_target_dir(&root).unwrap();
 
         assert_eq!(
-            fs::read_to_string(generation.join(".check-docs-generation")).unwrap(),
+            fs::read_to_string(generation.join(".excra-generation")).unwrap(),
             GENERATION_MARKER
         );
         assert_eq!(
@@ -2991,7 +2980,7 @@ mod tests {
     #[test]
     fn generation_directory_without_a_marker_remains_unowned() {
         let temp = tempfile::TempDir::new().unwrap();
-        let root = temp.path().join("check-docs");
+        let root = temp.path().join("excra");
         let generation = root.join("generation");
         fs::create_dir_all(&generation).unwrap();
         fs::write(generation.join("keep.txt"), "keep me\n").unwrap();
@@ -3016,17 +3005,17 @@ mod tests {
         fs::create_dir(&target).unwrap();
         fs::create_dir(&victim).unwrap();
         fs::write(victim.join("keep.txt"), "keep me\n").unwrap();
-        symlink(&victim, target.join("check-docs")).unwrap();
+        symlink(&victim, target.join("excra")).unwrap();
 
         let error = prepare_generation_root(&target).unwrap_err();
 
-        assert!(error.contains("non-directory or symlink check-docs managed root"));
+        assert!(error.contains("non-directory or symlink excra managed root"));
         assert_eq!(
             fs::read_to_string(victim.join("keep.txt")).unwrap(),
             "keep me\n"
         );
         assert!(
-            fs::symlink_metadata(target.join("check-docs"))
+            fs::symlink_metadata(target.join("excra"))
                 .unwrap()
                 .file_type()
                 .is_symlink()
@@ -3039,9 +3028,9 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let temp = tempfile::TempDir::new().unwrap();
-        let root = temp.path().join("check-docs");
+        let root = temp.path().join("excra");
         let generation = reset_generation_target_dir(&root).unwrap();
-        let marker = generation.join(".check-docs-generation");
+        let marker = generation.join(".excra-generation");
         let victim = temp.path().join("victim");
         fs::write(&victim, GENERATION_MARKER).unwrap();
         fs::remove_file(&marker).unwrap();
@@ -3126,7 +3115,7 @@ mod tests {
             version: 1,
             roots: vec![0],
             units: vec![
-                unit(root.id.to_string(), "check-docs", "bin", &[], &[1, 2]),
+                unit(root.id.to_string(), "excra", "bin", &[], &[1, 2]),
                 unit(
                     dependency.id.to_string(),
                     &target.name,
@@ -3176,7 +3165,7 @@ mod tests {
             version: 1,
             roots: vec![0],
             units: vec![
-                unit(root.id.to_string(), "check-docs", "bin", &[], &[1, 2]),
+                unit(root.id.to_string(), "excra", "bin", &[], &[1, 2]),
                 unit(facade_one.clone(), "facade", "lib", &["one"], &[3]),
                 unit(facade_two, "facade", "lib", &["two"], &[4]),
                 unit(

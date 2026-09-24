@@ -54,7 +54,7 @@ fn write_member(workspace: &TempDir, name: &str, manifest: &str, source: &str) {
 
 #[test]
 fn binary_reports_dependency_item() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use cargo_metadata::MetadataCommand;", "--root", "."])
         .output()
         .unwrap();
@@ -69,7 +69,7 @@ fn binary_reports_dependency_item() {
 }
 
 #[test]
-fn binary_uses_check_docs_toolchain_for_the_entire_query() {
+fn binary_uses_excra_toolchain_for_the_entire_query() {
     let workspace = TempDir::new().unwrap();
     fs::write(
         workspace.path().join("Cargo.toml"),
@@ -90,7 +90,7 @@ fn binary_uses_check_docs_toolchain_for_the_entire_query() {
     );
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -100,9 +100,9 @@ fn binary_uses_check_docs_toolchain_for_the_entire_query() {
         ])
         .env(
             "RUSTUP_TOOLCHAIN",
-            "definitely-missing-check-docs-ambient-toolchain",
+            "definitely-missing-excra-ambient-toolchain",
         )
-        .env("CHECK_DOCS_TOOLCHAIN", "nightly-2025-09-10")
+        .env("EXCRA_TOOLCHAIN", "nightly-2025-09-10")
         .output()
         .unwrap();
 
@@ -116,7 +116,7 @@ fn binary_uses_check_docs_toolchain_for_the_entire_query() {
 
 #[test]
 fn binary_reports_batch_brace_imports() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use cargo_metadata::{Metadata, Package};", "--root", "."])
         .output()
         .unwrap();
@@ -134,7 +134,7 @@ fn binary_reports_batch_brace_imports() {
 
 #[test]
 fn binary_reports_transitive_item_through_external_module_reexport() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use cargo_metadata::camino::Utf8PathBuf;", "--root", "."])
         .output()
         .unwrap();
@@ -150,7 +150,7 @@ fn binary_reports_transitive_item_through_external_module_reexport() {
 
 #[test]
 fn binary_reports_transitive_external_crate_root_reexport() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use cargo_metadata::camino;", "--root", "."])
         .output()
         .unwrap();
@@ -170,7 +170,7 @@ fn binary_reports_transitive_external_crate_root_reexport() {
 
 #[test]
 fn binary_rejects_same_spelling_across_rust_namespaces_as_ambiguous() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use serde::Serialize;", "--root", "."])
         .output()
         .unwrap();
@@ -195,7 +195,7 @@ fn binary_rejects_same_spelling_across_rust_namespaces_as_ambiguous() {
 
 #[test]
 fn binary_reports_visible_use_item() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["pub(crate) use syn::ItemUse;", "--root", "."])
         .output()
         .unwrap();
@@ -211,7 +211,7 @@ fn binary_reports_visible_use_item() {
 
 #[test]
 fn binary_formats_trait_methods_without_pub() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use syn::parse::Parse;", "--root", "."])
         .output()
         .unwrap();
@@ -269,7 +269,7 @@ edition = "2024"
     .unwrap();
 
     lock_workspace(&workspace);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep_crate::Thing;",
             "--root",
@@ -343,7 +343,7 @@ pub struct Annotated {
     .unwrap();
 
     lock_workspace(&workspace);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use metadata_dep::Annotated;",
             "--root",
@@ -423,7 +423,7 @@ pub struct Documented;
     .unwrap();
 
     lock_workspace(&workspace);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use r#type::{Number::One, r#match::r#type, Documented};",
             "--root",
@@ -520,7 +520,7 @@ edition = "2024"
     .unwrap();
 
     lock_workspace(&workspace);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::Missing;",
             "--root",
@@ -588,7 +588,7 @@ pub mod api {}
     )
     .unwrap();
     lock_workspace(&workspace);
-    let advanced = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let advanced = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use advanced::{Alias, Marker, api};",
             "--root",
@@ -658,7 +658,7 @@ crate-type = ["rlib", "cdylib"]
     .unwrap();
 
     lock_workspace(&workspace);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::Thing;",
             "--root",
@@ -765,7 +765,7 @@ edition = "2024"
 
     lock_workspace(&workspace);
     for import in ["use facade::Thing;", "use facade::globbed::Thing;"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 import,
                 "--root",
@@ -818,7 +818,7 @@ fn binary_follows_named_and_glob_reexports_through_a_renamed_dependency() {
     lock_workspace(&workspace);
 
     for item in ["Named", "Globbed"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 &format!("use facade::{item};"),
                 "--root",
@@ -931,7 +931,7 @@ unsafe extern "C" {
     .unwrap();
 
     lock_workspace(&workspace);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use definitions::{Callback, Named, Tuple, Choice, Number, make, COUNT, READY, Defaults, FOREIGN, SAFE_FOREIGN};",
             "--root",
@@ -1026,7 +1026,7 @@ pub struct SelectedOnly;
     .unwrap();
     lock_workspace(&workspace);
 
-    let selected = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let selected = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use feature_dep::SelectedOnly;",
             "--root",
@@ -1045,7 +1045,7 @@ pub struct SelectedOnly;
         String::from_utf8_lossy(&selected.stdout).contains("definition: pub struct SelectedOnly;")
     );
 
-    let default_only = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let default_only = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use feature_dep::DefaultOnly;",
             "--root",
@@ -1104,7 +1104,7 @@ locked_dep = { path = "../locked_dep" }
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use locked_dep::Thing;",
             "--root",
@@ -1190,7 +1190,7 @@ resolver = "3"
     }
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::{Thing, NestedThing};",
             "--root",
@@ -1253,7 +1253,7 @@ fn binary_detects_explicit_item_plus_external_glob_namespace_ambiguity() {
     .unwrap();
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::Thing;",
             "--root",
@@ -1280,7 +1280,7 @@ fn binary_detects_explicit_item_plus_external_glob_namespace_ambiguity() {
 
 #[test]
 fn binary_does_not_call_a_missing_lowercase_item_a_module() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use syn::definitely_missing_function;", "--root", "."])
         .output()
         .unwrap();
@@ -1339,7 +1339,7 @@ fn context_reexport_workspace(dependency_section: &str, build_script: bool) -> T
 #[test]
 fn binary_preserves_dev_context_across_external_reexports() {
     let workspace = context_reexport_workspace("[dev-dependencies]", false);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::ContextThing;",
             "--root",
@@ -1374,7 +1374,7 @@ fn binary_preserves_build_context_across_external_reexports() {
         "[build]\ntarget = \"wasm32-unknown-unknown\"\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::ContextThing;",
             "--root",
@@ -1477,7 +1477,7 @@ pub struct DevOnly;
     .unwrap();
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::DevOnly;",
             "--root",
@@ -1540,7 +1540,7 @@ fn binary_composes_with_a_recording_workspace_rustc_wrapper() {
     let wrapper_log = workspace.path().join("wrapper.log");
     fs::write(
         &wrapper,
-        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$CHECK_DOCS_TEST_WRAPPER_LOG\"\nexec \"$@\"\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$EXCRA_TEST_WRAPPER_LOG\"\nexec \"$@\"\n",
     )
     .unwrap();
     let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
@@ -1556,7 +1556,7 @@ fn binary_composes_with_a_recording_workspace_rustc_wrapper() {
     .unwrap();
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use wrapped_dep::WrappedThing;",
             "--root",
@@ -1564,7 +1564,7 @@ fn binary_composes_with_a_recording_workspace_rustc_wrapper() {
             "--package",
             "app",
         ])
-        .env("CHECK_DOCS_TEST_WRAPPER_LOG", &wrapper_log)
+        .env("EXCRA_TEST_WRAPPER_LOG", &wrapper_log)
         .output()
         .unwrap();
 
@@ -1647,7 +1647,7 @@ pub struct HostOnly;
     .unwrap();
     lock_workspace(&workspace);
 
-    let context_output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let context_output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use shared::{TargetOnly, HostOnly};",
             "--root",
@@ -1699,7 +1699,7 @@ pub struct HostOnly;
     assert!(host_json.contains("\"HostOnly\""), "{host_source:?}");
     assert!(!host_json.contains("\"TargetOnly\""), "{host_source:?}");
 
-    let macro_output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let macro_output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use macro_dep::make_thing;",
             "--root",
@@ -1757,7 +1757,7 @@ pub struct CfgAttrOnly;
     );
     lock_workspace(&workspace);
 
-    let valid = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let valid = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use platform_dep::UnixOnly;",
             "--root",
@@ -1774,7 +1774,7 @@ pub struct CfgAttrOnly;
     );
     assert!(String::from_utf8_lossy(&valid.stdout).contains("pub struct UnixOnly;"));
 
-    let doc_only = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let doc_only = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use platform_dep::DocOnly;",
             "--root",
@@ -1788,7 +1788,7 @@ pub struct CfgAttrOnly;
     let stderr = String::from_utf8_lossy(&doc_only.stderr);
     assert!(stderr.contains("item 'DocOnly' not found"), "{stderr}");
 
-    let cfg_attr_only = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let cfg_attr_only = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use platform_dep::CfgAttrOnly;",
             "--root",
@@ -1838,7 +1838,7 @@ fn binary_supports_relative_child_and_sibling_roots() {
         String::from_utf8_lossy(&lock.stderr)
     );
 
-    let child = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let child = Command::new(env!("CARGO_BIN_EXE_excra"))
         .current_dir(parent.path())
         .args(["use dep::Thing;", "--root", "sibling", "--package", "app"])
         .output()
@@ -1850,7 +1850,7 @@ fn binary_supports_relative_child_and_sibling_roots() {
     );
 
     fs::create_dir_all(parent.path().join("runner")).unwrap();
-    let relative_sibling = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let relative_sibling = Command::new(env!("CARGO_BIN_EXE_excra"))
         .current_dir(parent.path().join("runner"))
         .args([
             "use dep::Thing;",
@@ -1919,7 +1919,7 @@ extra = []
     lock_workspace(&workspace);
 
     for feature_args in [vec!["--features", "extra"], vec!["--all-features"]] {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_check-docs"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_excra"));
         command.args([
             "use feature_dep::Extra;",
             "--root",
@@ -1938,7 +1938,7 @@ extra = []
         assert!(String::from_utf8_lossy(&output.stdout).contains("root features: --"));
     }
 
-    let no_defaults = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let no_defaults = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use feature_dep::DefaultOnly;",
             "--root",
@@ -2007,7 +2007,7 @@ pub struct Thing;
     lock_workspace(&workspace);
 
     let query = |feature_args: &[&str]| {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_check-docs"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_excra"));
         command.args([
             "use dep::Thing;",
             "--root",
@@ -2092,7 +2092,7 @@ fn binary_composes_with_a_general_cfg_injecting_rustc_wrapper() {
     .unwrap();
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use wrapped_dep::WrappedThing;",
             "--root",
@@ -2150,7 +2150,7 @@ fn binary_matches_raw_cfg_flags_and_cfg_attr_derives_from_a_rustc_wrapper() {
     .unwrap();
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use raw_dep::{RawCfg, UnicodeCfg, UnicodeValue};",
             "--root",
@@ -2206,7 +2206,7 @@ fn binary_does_not_add_a_toolchain_hint_to_an_unrelated_compiler_error() {
     );
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -2260,7 +2260,7 @@ fn binary_fails_when_one_selected_context_cannot_be_verified() {
     .unwrap();
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -2302,7 +2302,7 @@ fn binary_preserves_bound_pointee_parentheses() {
         &format!("{signature} {{}}\n"),
     );
     lock_workspace(&workspace);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::inspect;",
             "--root",
@@ -2396,7 +2396,7 @@ fn binary_respects_shadowed_intermediate_glob_paths() {
         .unwrap();
         for (path, succeeds) in [("nested", !shadows), ("sibling", true), ("named", true)] {
             let query = format!("use facade::{path}::Thing;");
-            let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+            let output = Command::new(env!("CARGO_BIN_EXE_excra"))
                 .env("CARGO_TARGET_DIR", workspace.path().join("target"))
                 .args([
                     &query,
@@ -2492,7 +2492,7 @@ fn binary_deduplicates_equivalent_external_reexport_routes() {
     ] {
         fs::write(workspace.path().join("right/src/lib.rs"), right).unwrap();
         let query = "use facade::Thing;";
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .env("CARGO_TARGET_DIR", workspace.path().join("target"))
             .args([
                 query,
@@ -2598,7 +2598,7 @@ fn binary_applies_named_shadowing_per_exact_namespace() {
     lock_workspace(&workspace);
 
     for import in ["use facade::Same;", "use facade::VariantUnit;"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 import,
                 "--root",
@@ -2616,7 +2616,7 @@ fn binary_applies_named_shadowing_per_exact_namespace() {
         assert!(String::from_utf8_lossy(&output.stdout).contains("crate: direct_origin"));
     }
     for import in ["use facade::Partial;", "use facade::Variant;"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 import,
                 "--root",
@@ -2658,7 +2658,7 @@ fn binary_rejects_local_globs_shadowed_by_private_type_and_value_bindings() {
     lock_workspace(&workspace);
 
     for name in ["Thing", "action", "Alias"] {
-        let shadowed = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let shadowed = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 &format!("use dep::{name};"),
                 "--root",
@@ -2715,7 +2715,7 @@ fn binary_rejects_local_globs_shadowed_by_private_type_and_value_bindings() {
         ("use dep::Conditional;", "item: fn Conditional"),
         ("use dep::donor::Thing;", "item: struct Thing"),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 import,
                 "--root",
@@ -2777,7 +2777,7 @@ fn binary_honors_self_import_namespaces_and_primitive_reexports() {
     );
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use shape_dep::{foo::{self, Nested, External}, Choice::One, remote::Nested, Bar::{self}, MyI32};",
             "--root",
@@ -2813,7 +2813,7 @@ fn binary_honors_self_import_namespaces_and_primitive_reexports() {
         assert!(stdout.contains(expected), "{stdout}");
     }
     for import in ["use shape_dep::foo;", "use shape_dep::Choice;"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 import,
                 "--root",
@@ -2840,7 +2840,7 @@ fn binary_does_not_prescribe_lockfile_refresh_for_manifest_errors() {
         "[package\nname = \"broken\"\n",
     )
     .unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -2861,7 +2861,7 @@ fn binary_does_not_prescribe_lockfile_refresh_for_manifest_errors() {
 #[test]
 fn binary_reports_non_unicode_roots_without_panicking() {
     let root = OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff]);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .arg("use dep::Thing;")
         .arg("--root")
         .arg(root)
@@ -2907,7 +2907,7 @@ fn binary_keeps_non_exhaustive_constructors_out_of_the_external_value_namespace(
     );
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::Token;",
             "--root",
@@ -2951,7 +2951,7 @@ fn binary_follows_external_reexports_through_stripped_private_modules() {
     );
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::{Thing, AliasThing};",
             "--root",
@@ -2975,7 +2975,7 @@ fn binary_follows_external_reexports_through_stripped_private_modules() {
         "{stdout}"
     );
 
-    let syn = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let syn = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use syn::Ident;", "--root", "."])
         .output()
         .unwrap();
@@ -3012,7 +3012,7 @@ fn disjoint_alias_workspace(context_section: &str, build_script: bool) -> TempDi
 #[test]
 fn binary_resolves_one_extern_name_to_disjoint_normal_and_build_packages() {
     let workspace = disjoint_alias_workspace("build-dependencies", true);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use shared::{de::IgnoredAny, Value};",
             "--root",
@@ -3042,7 +3042,7 @@ fn binary_resolves_one_extern_name_to_disjoint_normal_and_build_packages() {
 #[test]
 fn binary_resolves_one_extern_name_to_disjoint_normal_and_dev_packages() {
     let workspace = disjoint_alias_workspace("dev-dependencies", false);
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use shared::{de::IgnoredAny, Value};",
             "--root",
@@ -3115,7 +3115,7 @@ pub struct BuildOnly;
     );
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use shared::{DevOnly, BuildOnly};",
             "--root",
@@ -3179,7 +3179,7 @@ fn binary_matches_profile_before_compiler_flag_overrides() {
             "definition: pub struct NoDebug;",
         ),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 query,
                 "--root",
@@ -3266,7 +3266,7 @@ pub struct BuildProfile;
         ("DevProfile", "--include-dev", "dev"),
         ("BuildProfile", "--include-build", "build"),
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 &format!("use shared::{item};"),
                 "--root",
@@ -3369,7 +3369,7 @@ pub struct BuildProfile;
     let rustdoc_log = workspace.path().join("rustdoc.log");
     fs::write(
         &wrapper,
-        "#!/bin/sh\ncase \"$1\" in\n  */rustdoc|rustdoc) printf '%s\\n' rustdoc >> \"$CHECK_DOCS_TEST_RUSTDOC_LOG\" ;;\nesac\nexec \"$@\"\n",
+        "#!/bin/sh\ncase \"$1\" in\n  */rustdoc|rustdoc) printf '%s\\n' rustdoc >> \"$EXCRA_TEST_RUSTDOC_LOG\" ;;\nesac\nexec \"$@\"\n",
     )
     .unwrap();
     let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
@@ -3387,7 +3387,7 @@ pub struct BuildProfile;
 
     for flags in ["", "-C opt-level=2"] {
         fs::write(&rustdoc_log, "").unwrap();
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 "use shared::DevProfile;",
                 "--root",
@@ -3396,7 +3396,7 @@ pub struct BuildProfile;
                 "app",
                 "--include-dev",
             ])
-            .env("CHECK_DOCS_TEST_RUSTDOC_LOG", &rustdoc_log)
+            .env("EXCRA_TEST_RUSTDOC_LOG", &rustdoc_log)
             .env_remove("CARGO_ENCODED_RUSTFLAGS")
             .env("RUSTFLAGS", flags)
             .output()
@@ -3424,14 +3424,14 @@ pub struct BuildProfile;
 
 #[test]
 fn binary_suggests_flags_for_dependencies_excluded_by_kind() {
-    let dev = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let dev = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use tempfile::TempDir;", "--root", "."])
         .output()
         .unwrap();
     assert!(!dev.status.success());
     assert_eq!(
         String::from_utf8_lossy(&dev.stderr),
-        "check-docs: crate 'tempfile' is declared only in dependency contexts excluded by default; retry with `--include-dev`\n"
+        "excra: crate 'tempfile' is declared only in dependency contexts excluded by default; retry with `--include-dev`\n"
     );
 
     let workspace = TempDir::new().unwrap();
@@ -3455,7 +3455,7 @@ fn binary_suggests_flags_for_dependencies_excluded_by_kind() {
     );
     lock_workspace(&workspace);
 
-    let build = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let build = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use only_build::BuildThing;",
             "--root",
@@ -3468,7 +3468,7 @@ fn binary_suggests_flags_for_dependencies_excluded_by_kind() {
     assert!(!build.status.success());
     assert_eq!(
         String::from_utf8_lossy(&build.stderr),
-        "check-docs: crate 'only_build' is declared only in dependency contexts excluded by default; retry with `--include-build`\n"
+        "excra: crate 'only_build' is declared only in dependency contexts excluded by default; retry with `--include-build`\n"
     );
 }
 
@@ -3496,7 +3496,7 @@ fn binary_suggests_include_build_for_a_host_only_cross_target_dependency() {
     );
     lock_workspace(&workspace);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use host_build::HostThing;",
             "--root",
@@ -3512,14 +3512,14 @@ fn binary_suggests_include_build_for_a_host_only_cross_target_dependency() {
     assert!(!output.status.success());
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),
-        "check-docs: crate 'host_build' is declared only in dependency contexts excluded by default; retry with `--include-build`\n"
+        "excra: crate 'host_build' is declared only in dependency contexts excluded by default; retry with `--include-build`\n"
     );
 }
 
 #[test]
 fn binary_normalizes_cargo_host_target_from_environment_and_config() {
     let host = host_target_triple();
-    let environment = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let environment = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args(["use cargo_metadata::Metadata;", "--root", "."])
         .env("CARGO_BUILD_TARGET", "host")
         .output()
@@ -3552,7 +3552,7 @@ fn binary_normalizes_cargo_host_target_from_environment_and_config() {
     );
     lock_workspace(&workspace);
 
-    let explicit = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let explicit = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -3585,7 +3585,7 @@ fn binary_normalizes_cargo_host_target_from_environment_and_config() {
         "[build]\ntarget = \"host\"\n",
     )
     .unwrap();
-    let configured = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let configured = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -3607,7 +3607,7 @@ fn binary_normalizes_cargo_host_target_from_environment_and_config() {
         "[build]\ntarget = [\"host\"]\n",
     )
     .unwrap();
-    let singleton = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let singleton = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -3664,7 +3664,7 @@ fn binary_regenerates_after_a_config_relative_wrapper_changes_semantics() {
     fs::set_permissions(&wrapper, permissions.clone()).unwrap();
     lock_workspace(&workspace);
 
-    let first = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let first = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use wrapped_dep::FirstOnly;",
             "--root",
@@ -3688,7 +3688,7 @@ fn binary_regenerates_after_a_config_relative_wrapper_changes_semantics() {
     )
     .unwrap();
     fs::set_permissions(&wrapper, permissions).unwrap();
-    let second = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let second = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use wrapped_dep::SecondOnly;",
             "--root",
@@ -3732,7 +3732,7 @@ fn binary_bounds_managed_generation_retention_for_sequential_and_concurrent_quer
     let root = workspace.path().to_path_buf();
 
     let query = |root: &std::path::Path| {
-        Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([
                 "use dep::Thing;",
                 "--root",
@@ -3765,7 +3765,7 @@ fn binary_bounds_managed_generation_retention_for_sequential_and_concurrent_quer
         );
     }
 
-    let managed_root = workspace.path().join("target/check-docs");
+    let managed_root = workspace.path().join("target/excra");
     let mut directories = fs::read_dir(&managed_root)
         .unwrap()
         .filter_map(Result::ok)
@@ -3775,8 +3775,8 @@ fn binary_bounds_managed_generation_retention_for_sequential_and_concurrent_quer
     directories.sort();
     assert_eq!(directories, [OsString::from("generation")]);
     assert_eq!(
-        fs::read_to_string(managed_root.join("generation/.check-docs-generation")).unwrap(),
-        "check-docs managed generation\n"
+        fs::read_to_string(managed_root.join("generation/.excra-generation")).unwrap(),
+        "excra managed generation\n"
     );
 }
 
@@ -3812,12 +3812,12 @@ fn binary_rejects_a_symlink_lock_without_modifying_its_target() {
 
     let manifest = workspace.path().join("Cargo.toml");
     let original_manifest = fs::read_to_string(&manifest).unwrap();
-    let lock_dir = target_dir.join("check-docs");
+    let lock_dir = target_dir.join("excra");
     fs::create_dir_all(&lock_dir).unwrap();
     let lock_path = lock_dir.join("generation.lock");
     symlink(Path::new("../../Cargo.toml"), &lock_path).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -3872,16 +3872,16 @@ fn binary_rejects_a_symlink_managed_root_without_modifying_its_destination() {
     let victim_generation = workspace.path().join("victim/generation");
     fs::create_dir_all(&victim_generation).unwrap();
     fs::write(
-        victim_generation.join(".check-docs-generation"),
-        "check-docs managed generation\n",
+        victim_generation.join(".excra-generation"),
+        "excra managed generation\n",
     )
     .unwrap();
     fs::write(victim_generation.join("keep.txt"), "keep me\n").unwrap();
     fs::create_dir(&target_dir).unwrap();
-    let managed_root = target_dir.join("check-docs");
+    let managed_root = target_dir.join("excra");
     symlink(Path::new("../victim"), &managed_root).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use dep::Thing;",
             "--root",
@@ -3899,13 +3899,13 @@ fn binary_rejects_a_symlink_managed_root_without_modifying_its_destination() {
         "keep me\n"
     );
     assert_eq!(
-        fs::read_to_string(victim_generation.join(".check-docs-generation")).unwrap(),
-        "check-docs managed generation\n"
+        fs::read_to_string(victim_generation.join(".excra-generation")).unwrap(),
+        "excra managed generation\n"
     );
     assert!(fs::symlink_metadata(&managed_root).unwrap().is_symlink());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("refusing to use non-directory or symlink check-docs managed root"),
+        stderr.contains("refusing to use non-directory or symlink excra managed root"),
         "{stderr}"
     );
 }
@@ -3919,7 +3919,7 @@ fn binary_preserves_path_lookup_for_bare_general_wrapper_names() {
     fs::create_dir_all(&tools).unwrap();
     fs::write(
         workspace.path().join(".cargo/config.toml"),
-        "[build]\nrustc-wrapper = \"bare-check-docs-wrapper\"\n",
+        "[build]\nrustc-wrapper = \"bare-excra-wrapper\"\n",
     )
     .unwrap();
     fs::write(
@@ -3939,7 +3939,7 @@ fn binary_preserves_path_lookup_for_bare_general_wrapper_names() {
         "[package]\nname = \"wrapped_dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
         "pub struct WrappedThing;\n",
     );
-    let wrapper = tools.join("bare-check-docs-wrapper");
+    let wrapper = tools.join("bare-excra-wrapper");
     fs::write(&wrapper, "#!/bin/sh\nexec \"$@\"\n").unwrap();
     let mut permissions = fs::metadata(&wrapper).unwrap().permissions();
     permissions.set_mode(0o755);
@@ -3951,7 +3951,7 @@ fn binary_preserves_path_lookup_for_bare_general_wrapper_names() {
     ));
     let path = std::env::join_paths(paths).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use wrapped_dep::WrappedThing;",
             "--root",
@@ -3975,7 +3975,7 @@ fn binary_preserves_path_lookup_for_bare_general_wrapper_names() {
 
 #[test]
 fn binary_rejects_bad_import() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .arg("use crate::local::Thing;")
         .output()
         .unwrap();
@@ -3990,7 +3990,7 @@ fn binary_rejects_rust_standard_library_items() {
         "use core::fmt::Debug;",
         "use alloc::vec::Vec;",
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .arg(import)
             .output()
             .unwrap();
@@ -4004,14 +4004,14 @@ fn binary_rejects_rust_standard_library_items() {
 #[test]
 fn binary_reports_unknown_argument() {
     for args in [["--bad", ""], ["use syn::ItemUse;", "--bad"]] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args(args.into_iter().filter(|arg| !arg.is_empty()))
             .output()
             .unwrap();
         assert!(!output.status.success());
         assert_eq!(
             String::from_utf8_lossy(&output.stderr),
-            "check-docs: unknown argument: --bad\nusage: check-docs '<use crate_name::module::item;>' [--root PATH] [--package NAME_OR_ID] [--target TRIPLE] [--features FEATURES] [--all-features] [--no-default-features] [--include-dev] [--include-build]\n  --include-dev    include direct dev-dependencies (excluded by default)\n  --include-build  include direct build-dependencies (excluded by default)\n"
+            "excra: unknown argument: --bad\nusage: excra '<use crate_name::module::item;>' [--root PATH] [--package NAME_OR_ID] [--target TRIPLE] [--features FEATURES] [--all-features] [--no-default-features] [--include-dev] [--include-build]\n  --include-dev    include direct dev-dependencies (excluded by default)\n  --include-build  include direct build-dependencies (excluded by default)\n"
         );
     }
 }
@@ -4022,7 +4022,7 @@ fn binary_rejects_malformed_import_syntax() {
         "use cargo_metadata::::Metadata;",
         "use cargo_metadata::{Metadata,,Package};",
     ] {
-        let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
             .args([import, "--root", "."])
             .output()
             .unwrap();
@@ -4036,7 +4036,7 @@ fn binary_rejects_malformed_import_syntax() {
 
 #[test]
 fn binary_reports_missing_root_value() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .arg("--root")
         .output()
         .unwrap();
@@ -4046,12 +4046,12 @@ fn binary_reports_missing_root_value() {
 
 #[test]
 fn binary_prints_help() {
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .arg("--help")
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("usage: check-docs"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("usage: excra"));
 }
 
 #[cfg(unix)]
@@ -4076,7 +4076,7 @@ fn binary_reuses_unit_graphs_for_batch_and_external_queries() {
     fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
     let mut paths = vec![shim_dir];
     paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
-    let output = Command::new(env!("CARGO_BIN_EXE_check-docs"))
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
             "use facade::{ContextThing, ContextThing, ContextThing};",
             "--root",

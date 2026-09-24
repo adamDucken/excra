@@ -102,13 +102,13 @@ impl std::fmt::Display for QueryError {
 }
 
 fn main() -> ExitCode {
-    if std::env::var_os("CHECK_DOCS_RUSTC_WRAPPER_MODE").is_some() {
+    if std::env::var_os("EXCRA_RUSTC_WRAPPER_MODE").is_some() {
         rustdoc_json::run_rustc_wrapper();
     }
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
-            eprintln!("check-docs: {message}");
+            eprintln!("excra: {message}");
             ExitCode::from(2)
         }
     }

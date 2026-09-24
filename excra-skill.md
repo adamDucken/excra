@@ -1,10 +1,10 @@
-# check-docs Skill
+# excra Skill
 
-Use `check-docs` for local Rust dependency docs from the exact crate version and feature set resolved by the target Cargo project. Prefer it over web search/docs.rs when working inside a Cargo project.
+Use `excra` for local Rust dependency docs from the exact crate version and feature set resolved by the target Cargo project. Prefer it over web search/docs.rs when working inside a Cargo project.
 
 ## What it does
 
-`check-docs` resolves external `use` paths against the project at `--root`, generates/loads Rustdoc JSON for direct dependencies, and prints compact docs for requested items.
+`excra` resolves external `use` paths against the project at `--root`, generates/loads Rustdoc JSON for direct dependencies, and prints compact docs for requested items.
 
 It reports:
 
@@ -53,13 +53,13 @@ Do not use for:
 ## Command
 
 ```bash
-check-docs 'use crate_name::module::item;' --root /path/to/cargo/project
+excra 'use crate_name::module::item;' --root /path/to/cargo/project
 ```
 
 If already in project root:
 
 ```bash
-check-docs 'use crate_name::module::item;'
+excra 'use crate_name::module::item;'
 ```
 
 Quote the full use line as one shell argument.
@@ -67,18 +67,18 @@ Quote the full use line as one shell argument.
 ## Examples
 
 ```bash
-check-docs 'use syn::parse_file;' --root .
-check-docs 'use cargo_metadata::MetadataCommand;' --root /home/adam/Desktop/rust/arbre_v1
-check-docs 'use serde::ser::Serialize;' --root .
-check-docs 'use tokio::sync::{Mutex, RwLock, Semaphore};' --root .
+excra 'use syn::parse_file;' --root .
+excra 'use cargo_metadata::MetadataCommand;' --root /home/adam/Desktop/rust/arbre_v1
+excra 'use serde::ser::Serialize;' --root .
+excra 'use tokio::sync::{Mutex, RwLock, Semaphore};' --root .
 ```
 
 Root-package feature selection uses Cargo-compatible flags:
 
 ```bash
-check-docs 'use dependency::Extra;' --root . --features extra
-check-docs 'use dependency::Extra;' --root . --all-features
-check-docs 'use dependency::DefaultApi;' --root . --no-default-features
+excra 'use dependency::Extra;' --root . --features extra
+excra 'use dependency::Extra;' --root . --all-features
+excra 'use dependency::DefaultApi;' --root . --no-default-features
 ```
 
 `--features` accepts comma- or space-separated feature names and may be repeated.
@@ -141,7 +141,7 @@ Unsupported:
 
 ## Dependency and feature workflow
 
-`check-docs` asks Cargo for the selected root package's exact unit graph, then
+`excra` asks Cargo for the selected root package's exact unit graph, then
 runs the root Cargo operation with an internal compiler wrapper that emits
 Rustdoc JSON for the matching dependency unit. Conceptually, the Cargo side is:
 
@@ -189,12 +189,12 @@ Consequences:
 - Cargo's configured general compiler wrapper also remains in the chain for both
   ordinary compiler work and the matching generated Rustdoc invocation. Relative
   wrapper paths retain Cargo's defining-config origin semantics, bare names use
-  `PATH`, and wrapper discovery uses `CHECK_DOCS_TOOLCHAIN` consistently.
-- The `CHECK_DOCS_TOOLCHAIN` selection is resolved once per query and applied to host
+  `PATH`, and wrapper discovery uses `EXCRA_TOOLCHAIN` consistently.
+- The `EXCRA_TOOLCHAIN` selection is resolved once per query and applied to host
   detection, metadata, Cargo configuration, unit-graph resolution, wrapper discovery,
   compilation, and Rustdoc generation; ambient Rustup overrides do not split those phases.
 - Each invocation starts from one clean, ownership-marked Cargo target tree under
-  `target/check-docs` and holds its inter-process lock until all reports are emitted.
+  `target/excra` and holds its inter-process lock until all reports are emitted.
   Selected Cargo units use distinct subdirectories, so every reported Rustdoc source
   remains available and unit-correct until the next safely locked invocation, while
   retained build artifacts stay bounded to one inactive generation tree. A fresh
@@ -222,8 +222,8 @@ Normal dependencies are included by default. Direct dev- and build-dependencies
 are excluded unless their Cargo contexts are requested explicitly:
 
 ```bash
-check-docs 'use dev_dependency::Item;' --root . --include-dev
-check-docs 'use build_dependency::Item;' --root . --include-build
+excra 'use dev_dependency::Item;' --root . --include-dev
+excra 'use build_dependency::Item;' --root . --include-build
 ```
 
 Both flags may be supplied together. Each selected context is resolved and reported
@@ -233,14 +233,14 @@ If dependency is missing:
 
 1. Add it to `Cargo.toml` with needed features.
 2. Run `cargo check` (or `cargo build`) to update resolution/lockfile.
-3. Run `check-docs` again.
+3. Run `excra` again.
 
 If item is “not found” but you believe it exists:
 
 1. Check whether item is behind a crate feature.
 2. Enable feature in `Cargo.toml`.
 3. Run `cargo check`.
-4. Re-run `check-docs`.
+4. Re-run `excra`.
 
 Example:
 
@@ -252,7 +252,7 @@ Then:
 
 ```bash
 cargo check
-check-docs 'use tokio::sync::mpsc::Sender;' --root .
+excra 'use tokio::sync::mpsc::Sender;' --root .
 ```
 
 ## Nightly requirement
@@ -267,10 +267,10 @@ rustup toolchain install nightly-2025-09-10 --component rustfmt clippy llvm-tool
 Or set:
 
 ```bash
-CHECK_DOCS_TOOLCHAIN=<toolchain> check-docs 'use dependency::Item;' --root .
+EXCRA_TOOLCHAIN=<toolchain> excra 'use dependency::Item;' --root .
 ```
 
-`CHECK_DOCS_TOOLCHAIN` is an advanced whole-query override; the selected Cargo and
+`EXCRA_TOOLCHAIN` is an advanced whole-query override; the selected Cargo and
 Rust compiler must support the target workspace and emit the `rustdoc-types 0.56.x`
 schema.
 
@@ -280,7 +280,7 @@ schema.
 2. Ensure target crate is a direct dependency. If not, add it with needed features and run `cargo check`.
 3. Copy exact external `use` line for target item(s).
 4. Prefer batch brace query for related items from same module.
-5. Run `check-docs '<use line>' --root <project-root>`.
+5. Run `excra '<use line>' --root <project-root>`.
 6. Use output definition/details/methods/associated constants/impls/derives/docs for implementation or answer.
 7. If “not found”, check feature flags before assuming item does not exist.
 8. Use web/docs.rs only after local docs fail, are missing, or target item is not a direct dependency.
