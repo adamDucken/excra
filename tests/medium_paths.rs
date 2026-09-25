@@ -207,6 +207,74 @@ fn module_and_extern_aliases_retain_the_cargo_dependency_name() {
 }
 
 #[test]
+fn local_module_shadows_same_named_external_crate_in_reexport_source() {
+    let workspace = workspace(&["app", "facade", "origin", "alternate"]);
+    write_member(&workspace, "app", "facade = { path = \"../facade\" }", "");
+    write_member(
+        &workspace,
+        "facade",
+        "origin = { path = \"../origin\" }\nalternate = { path = \"../alternate\" }",
+        "mod origin { pub use alternate::Thing; }\npub use origin::Thing;\npub use ::origin::Marker;\n",
+    );
+    write_member(
+        &workspace,
+        "origin",
+        "",
+        "pub struct Thing { pub origin_field: u8 }\npub struct Marker;\n",
+    );
+    write_member(
+        &workspace,
+        "alternate",
+        "",
+        "pub struct Thing { pub alternate_field: u8 }\n",
+    );
+    lock(&workspace);
+
+    let output = query(&workspace, "use facade::Thing;");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let raw: serde_json::Value = serde_json::from_slice(
+        &fs::read(
+            workspace
+                .path()
+                .join("target/excra/generation/unit-0/doc/facade.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let binding = raw["index"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|item| {
+            item["inner"]["use"]["name"] == "Thing"
+                && item["inner"]["use"]["source"] == "origin::Thing"
+        })
+        .unwrap();
+    let reexport = &binding["inner"]["use"];
+    let id = reexport["id"].as_u64().unwrap().to_string();
+    assert_eq!(
+        raw["paths"][&id]["path"],
+        serde_json::json!(["alternate", "Thing"]),
+        "{raw}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("crate: alternate 0.1.0\n"), "{stdout}");
+    assert!(
+        stdout.contains("definition: pub struct Thing { pub alternate_field: u8 }\n"),
+        "{stdout}"
+    );
+    assert_definition(
+        query(&workspace, "use facade::Marker;"),
+        "definition: pub struct Marker;",
+    );
+}
+
+#[test]
 fn revisiting_a_module_after_consuming_an_alias_segment_is_not_a_cycle() {
     let workspace = workspace(&["app", "facade", "origin"]);
     write_member(&workspace, "app", "facade = { path = \"../facade\" }", "");

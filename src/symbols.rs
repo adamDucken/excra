@@ -452,16 +452,6 @@ fn follow_use_or_external(
             .and_then(|target| external_from_id(krate, target))
             .is_some()
         {
-            if use_source_starts_with_external_crate(krate, use_item) {
-                return external_from_use(krate, use_item)
-                    .map(Followed::External)
-                    .ok_or_else(|| {
-                        SymbolError::InvalidRustdoc(format!(
-                            "use '{}' has an invalid external source path",
-                            use_item.source
-                        ))
-                    });
-            }
             match local_use_source_target(krate, id, use_item, visited) {
                 Ok(Some(Followed::Local(local_target))) => {
                     id = local_target;
@@ -474,6 +464,16 @@ fn follow_use_or_external(
                 Err(SymbolError::InvalidRustdoc(message))
                     if message.contains("is missing path segment") =>
                 {
+                    if use_source_starts_with_external_crate(krate, use_item) {
+                        return external_from_use(krate, use_item)
+                            .map(Followed::External)
+                            .ok_or_else(|| {
+                                SymbolError::InvalidRustdoc(format!(
+                                    "use '{}' has an invalid external source path",
+                                    use_item.source
+                                ))
+                            });
+                    }
                     // Public Rustdoc strips private modules even when they form the
                     // syntactic path of a valid public external re-export. A missing
                     // first segment can also be a Cargo-renamed extern crate, so keep
