@@ -69,6 +69,50 @@ fn binary_reports_dependency_item() {
 }
 
 #[test]
+fn binary_keeps_inherent_method_impl_constraints() {
+    let workspace = TempDir::new().unwrap();
+    fs::write(
+        workspace.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"app\", \"dep\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    write_member(
+        &workspace,
+        "app",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\ndep = { path = \"../dep\" }\n",
+        "",
+    );
+    write_member(
+        &workspace,
+        "dep",
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "pub struct Boxed<T>(pub T);\nimpl<T> Boxed<T> where T: Clone { pub fn duplicate(&self) -> T { self.0.clone() } }\nimpl Boxed<u8> { pub fn bytes(&self) -> u8 { self.0 } }\n",
+    );
+    lock_workspace(&workspace);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
+        .args([
+            "use dep::Boxed;",
+            "--root",
+            workspace.path().to_str().unwrap(),
+            "--package",
+            "app",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("methods:\n  impl Boxed<u8> { pub fn bytes(self: &Self) -> u8 }\n  impl<T> Boxed<T> where T: Clone { pub fn duplicate(self: &Self) -> T }\n"),
+        "{stdout}"
+    );
+}
+
+#[test]
 fn binary_uses_excra_toolchain_for_the_entire_query() {
     let workspace = TempDir::new().unwrap();
     fs::write(
