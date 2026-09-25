@@ -568,7 +568,7 @@ fn load_valid_json(path: &PathBuf, package: &Package) -> Result<Crate, String> {
     Ok(krate)
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct RustcCfg {
     flags: HashSet<String>,
     values: HashSet<(String, String)>,
@@ -606,6 +606,223 @@ fn load_rustc_cfg(path: &Path) -> Result<RustcCfg, String> {
         )
     })?;
     Ok(RustcCfg::parse(&output))
+}
+
+pub(crate) fn reject_non_doc_only_source(
+    krate: &Crate,
+    target: &Target,
+    json_path: &Path,
+    import: &crate::imports::ImportPath,
+) -> Result<(), String> {
+    let cfg = load_rustc_cfg(&json_path.with_extension("cfg"))?;
+    let mut sources = krate
+        .index
+        .values()
+        .filter(|item| item.crate_id == 0)
+        .filter_map(|item| item.span.as_ref().map(|span| span.filename.clone()))
+        .collect::<HashSet<_>>();
+    sources.insert(target.src_path.as_std_path().to_path_buf());
+    let mut sources = sources.into_iter().collect::<Vec<_>>();
+    sources.sort();
+    let mut doc_cfg = cfg.clone();
+    doc_cfg.flags.insert("doc".to_string());
+
+    fn attribute_matches(meta: &syn::Meta, cfg: &RustcCfg) -> bool {
+        let syn::Meta::List(list) = meta else {
+            return true;
+        };
+        match cfg_path(&list.path).as_str() {
+            "cfg" => syn::parse2::<syn::Meta>(list.tokens.clone())
+                .is_ok_and(|predicate| cfg_meta_matches(&predicate, cfg)),
+            "cfg_attr" => cfg_attr_expression_matches(&list.tokens.to_string(), cfg),
+            _ => true,
+        }
+    }
+
+    fn non_doc_only_attribute(
+        stream: proc_macro2::TokenStream,
+        normal: &RustcCfg,
+        documentation: &RustcCfg,
+    ) -> Option<usize> {
+        use proc_macro2::{Delimiter, TokenTree};
+        let mut tokens = stream.into_iter().peekable();
+        while let Some(token) = tokens.next() {
+            match token {
+                TokenTree::Punct(pound) if pound.as_char() == '#' => {
+                    if matches!(tokens.peek(), Some(TokenTree::Punct(bang)) if bang.as_char() == '!')
+                    {
+                        tokens.next();
+                    }
+                    if matches!(tokens.peek(), Some(TokenTree::Group(group)) if group.delimiter() == Delimiter::Bracket)
+                        && let Some(TokenTree::Group(group)) = tokens.next()
+                        && let Ok(meta) = syn::parse2::<syn::Meta>(group.stream())
+                        && attribute_matches(&meta, normal)
+                        && !attribute_matches(&meta, documentation)
+                    {
+                        return Some(pound.span().start().line);
+                    }
+                }
+                TokenTree::Group(group) => {
+                    if let Some(line) =
+                        non_doc_only_attribute(group.stream(), normal, documentation)
+                    {
+                        return Some(line);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    struct Affected<'a> {
+        normal: &'a RustcCfg,
+        documentation: &'a RustcCfg,
+        parts: Vec<&'a str>,
+        owner: Option<String>,
+        line: Option<usize>,
+    }
+    fn use_tree_may_bind(tree: &syn::UseTree, name: &str) -> bool {
+        match tree {
+            syn::UseTree::Path(path) => use_tree_may_bind(&path.tree, name),
+            syn::UseTree::Name(binding) => {
+                crate::imports::identifier_key(&binding.ident.to_string())
+                    == crate::imports::identifier_key(name)
+            }
+            syn::UseTree::Rename(binding) => {
+                crate::imports::identifier_key(&binding.rename.to_string())
+                    == crate::imports::identifier_key(name)
+            }
+            syn::UseTree::Glob(_) => true,
+            syn::UseTree::Group(group) => {
+                group.items.iter().any(|item| use_tree_may_bind(item, name))
+            }
+        }
+    }
+    impl<'ast> syn::visit::Visit<'ast> for Affected<'_> {
+        fn visit_item(&mut self, item: &'ast syn::Item) {
+            let previous = self.owner.clone();
+            self.owner = match item {
+                syn::Item::Struct(item) => Some(item.ident.to_string()),
+                syn::Item::Enum(item) => Some(item.ident.to_string()),
+                syn::Item::Union(item) => Some(item.ident.to_string()),
+                syn::Item::Trait(item) => Some(item.ident.to_string()),
+                syn::Item::Type(item) => Some(item.ident.to_string()),
+                syn::Item::Fn(item) => Some(item.sig.ident.to_string()),
+                syn::Item::Const(item) => Some(item.ident.to_string()),
+                syn::Item::Static(item) => Some(item.ident.to_string()),
+                syn::Item::Mod(item) => Some(item.ident.to_string()),
+                syn::Item::Use(item) => Some(
+                    if use_tree_may_bind(&item.tree, self.parts.last().unwrap()) {
+                        *self.parts.last().unwrap()
+                    } else {
+                        "<other use>"
+                    }
+                    .to_string(),
+                ),
+                syn::Item::ExternCrate(item) => Some(
+                    item.rename
+                        .as_ref()
+                        .map(|(_, ident)| ident)
+                        .unwrap_or(&item.ident)
+                        .to_string(),
+                ),
+                syn::Item::Macro(item) => Some(item.ident.as_ref().map_or_else(
+                    || {
+                        if macro_contains_name(&item.mac.tokens, &self.parts) {
+                            self.parts.last().unwrap().to_string()
+                        } else {
+                            "<other macro>".to_string()
+                        }
+                    },
+                    ToString::to_string,
+                )),
+                syn::Item::Impl(item) => match item.self_ty.as_ref() {
+                    syn::Type::Path(ty) => {
+                        ty.path.segments.last().map(|part| part.ident.to_string())
+                    }
+                    _ => previous.clone(),
+                },
+                _ => previous.clone(),
+            };
+            if let syn::Item::Macro(item_macro) = item
+                && macro_contains_name(&item_macro.mac.tokens, &self.parts)
+                && let Some(line) = non_doc_only_attribute(
+                    item_macro.mac.tokens.clone(),
+                    self.normal,
+                    self.documentation,
+                )
+            {
+                self.line = Some(line);
+            }
+            syn::visit::visit_item(self, item);
+            self.owner = previous;
+        }
+
+        fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
+            let matches_query = self.owner.as_deref().is_none_or(|owner| {
+                self.parts.iter().any(|part| {
+                    crate::imports::identifier_key(owner) == crate::imports::identifier_key(part)
+                })
+            });
+            if matches_query
+                && attribute_matches(&attribute.meta, self.normal)
+                && !attribute_matches(&attribute.meta, self.documentation)
+            {
+                self.line = Some(attribute.pound_token.span.start().line);
+            }
+        }
+    }
+
+    fn macro_contains_name(tokens: &proc_macro2::TokenStream, parts: &[&str]) -> bool {
+        tokens.clone().into_iter().any(|token| match token {
+            proc_macro2::TokenTree::Ident(ident) => parts.iter().any(|part| {
+                crate::imports::identifier_key(&ident.to_string())
+                    == crate::imports::identifier_key(part)
+            }),
+            proc_macro2::TokenTree::Group(group) => macro_contains_name(&group.stream(), parts),
+            _ => false,
+        })
+    }
+
+    let mut parts = import
+        .segments
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    parts.push(&import.item);
+    for path in sources {
+        let source = fs::read_to_string(&path).map_err(|error| {
+            format!(
+                "cannot verify non-doc API source {}: {error}",
+                path.display()
+            )
+        })?;
+        if !source.contains("cfg") || !source.contains("doc") {
+            continue;
+        }
+        let file = syn::parse_file(&source).map_err(|error| {
+            format!(
+                "cannot verify non-doc API source {}: {error}",
+                path.display()
+            )
+        })?;
+        let mut affected = Affected {
+            normal: &cfg,
+            documentation: &doc_cfg,
+            parts: parts.clone(),
+            owner: None,
+            line: None,
+        };
+        syn::visit::Visit::visit_file(&mut affected, &file);
+        if let Some(line) = affected.line {
+            return Err(format!(
+                "non-doc API extraction is incomplete: {}:{line} enables source in the selected compilation but excludes it from Rustdoc JSON under cfg(doc)",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn apply_non_doc_cfg(krate: &mut Crate, cfg: &RustcCfg) -> Result<(), String> {

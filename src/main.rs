@@ -422,6 +422,8 @@ fn resolve_query(
     .map_err(QueryError::Incomplete)?;
     let krate = selected_docs.krate;
     let json_path = selected_docs.json_path;
+    rustdoc_json::reject_non_doc_only_source(&krate, target, &json_path, import)
+        .map_err(QueryError::Incomplete)?;
     let child_parent = rustdoc_json::CargoParentUnit {
         package_id: package.id.to_string(),
         graph_index: selected_docs.unit.graph_index,
