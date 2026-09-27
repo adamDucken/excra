@@ -2091,6 +2091,160 @@ pub struct Thing;
     );
 }
 
+#[test]
+fn binary_reconciles_doc_only_and_normal_cfg_attr_semantics() {
+    let workspace = TempDir::new().unwrap();
+    fs::write(
+        workspace.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"app\", \"dep\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    write_member(
+        &workspace,
+        "app",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\ndep = { path = \"../dep\" }\n",
+        "",
+    );
+    write_member(
+        &workspace,
+        "dep",
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        r#"#[cfg_attr(doc, derive(Clone))]
+pub struct Token;
+#[cfg_attr(doc, derive(PartialEq))]
+pub struct Comparable;
+#[cfg_attr(not(doc), non_exhaustive)]
+pub struct Closed;
+#[cfg_attr(doc, non_exhaustive)]
+pub struct Open;
+#[cfg_attr(doc, repr(C))]
+pub struct DocRepr(pub u8);
+#[cfg_attr(not(doc), repr(transparent))]
+pub struct NormalRepr(pub u8);
+#[repr(C)]
+#[cfg_attr(doc, repr(align(8)))]
+pub struct MixedRepr(pub u8);
+#[cfg_attr(not(doc), must_use = "normal")]
+pub struct NormalMustUse;
+#[cfg_attr(doc, must_use = "docs")]
+pub struct DocMustUse;
+#[cfg_attr(doc, deprecated(note = "docs only"))]
+pub struct DocDeprecated;
+#[cfg_attr(not(doc), deprecated(note = "normal only"))]
+pub struct NormalDeprecated;
+"#,
+    );
+    lock_workspace(&workspace);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_excra"))
+        .args([
+            "use dep::{Token, Comparable, Closed, Open, DocRepr, NormalRepr, MixedRepr, NormalMustUse, DocMustUse, DocDeprecated, NormalDeprecated};",
+            "--root",
+            workspace.path().to_str().unwrap(),
+            "--package",
+            "app",
+        ])
+        .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let report = |name: &str| {
+        let start = format!("item: struct {name}\n");
+        stdout
+            .split(&start)
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing {name}: {stdout}"))
+            .split("crate: dep ")
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    assert!(!report("Token").contains("derives:"), "{stdout}");
+    assert!(
+        !report("Token").contains("impl Clone for Token"),
+        "{stdout}"
+    );
+    assert!(!report("Comparable").contains("derives:"), "{stdout}");
+    assert!(!report("Comparable").contains("impl PartialEq"), "{stdout}");
+    assert!(
+        !report("Comparable").contains("StructuralPartialEq"),
+        "{stdout}"
+    );
+    assert!(
+        report("Closed").contains("  #[non_exhaustive]\n"),
+        "{stdout}"
+    );
+    assert!(!report("Open").contains("#[non_exhaustive]"), "{stdout}");
+    assert!(!report("DocRepr").contains("#[repr("), "{stdout}");
+    assert!(
+        report("NormalRepr").contains("  #[repr(transparent)]\n"),
+        "{stdout}"
+    );
+    assert!(report("MixedRepr").contains("  #[repr(C)]\n"), "{stdout}");
+    assert!(!report("MixedRepr").contains("align(8)"), "{stdout}");
+    assert!(
+        report("NormalMustUse").contains("  #[must_use = \"normal\"]\n"),
+        "{stdout}"
+    );
+    assert!(!report("DocMustUse").contains("#[must_use"), "{stdout}");
+    assert!(
+        !report("DocDeprecated").contains("deprecation:"),
+        "{stdout}"
+    );
+    assert!(
+        report("NormalDeprecated").contains("  note: normal only\n"),
+        "{stdout}"
+    );
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(report_source(&stdout)).unwrap()).unwrap();
+    let index = json["index"].as_object().unwrap();
+    let token = index.values().find(|item| item["name"] == "Token").unwrap();
+    assert!(token["attrs"].to_string().contains("cfg_attr"));
+    assert!(
+        token["inner"]["struct"]["impls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| {
+                let impl_item = &index[&id.to_string()];
+                impl_item["attrs"]
+                    .to_string()
+                    .contains("automatically_derived")
+                    && impl_item["inner"]["impl"]["trait"]["path"] == "Clone"
+            })
+    );
+    let mixed = index
+        .values()
+        .find(|item| item["name"] == "MixedRepr")
+        .unwrap();
+    assert_eq!(mixed["attrs"][1]["repr"]["align"], 8);
+
+    fs::write(
+        workspace.path().join("app/src/lib.rs"),
+        "pub fn verify() { fn needs_clone<T: Clone>() {} needs_clone::<dep::Token>(); let _ = dep::Closed; }",
+    )
+    .unwrap();
+    let normal = Command::new("cargo")
+        .args(["check", "--offline", "--locked", "-p", "app"])
+        .current_dir(workspace.path())
+        .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+        .output()
+        .unwrap();
+    assert!(!normal.status.success());
+    let diagnostics = String::from_utf8_lossy(&normal.stderr);
+    assert!(diagnostics.contains("Token: Clone"), "{diagnostics}");
+    assert!(
+        diagnostics.contains("cannot be constructed because it is `#[non_exhaustive]`"),
+        "{diagnostics}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn binary_composes_with_a_general_cfg_injecting_rustc_wrapper() {

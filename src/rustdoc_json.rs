@@ -831,6 +831,35 @@ fn apply_non_doc_cfg(krate: &mut Crate, cfg: &RustcCfg) -> Result<(), String> {
         .iter()
         .filter_map(|(id, item)| (!item_matches_cfg(item, cfg)).then_some(*id))
         .collect::<HashSet<_>>();
+    for item in krate.index.values() {
+        let mut disabled_derives = cfg_attr_derive_difference(&item.attrs, cfg);
+        if disabled_derives.contains("PartialEq") {
+            disabled_derives.insert("StructuralPartialEq".into());
+        }
+        let impls = match &item.inner {
+            rustdoc_types::ItemEnum::Struct(item) => &item.impls,
+            rustdoc_types::ItemEnum::Enum(item) => &item.impls,
+            rustdoc_types::ItemEnum::Union(item) => &item.impls,
+            _ => continue,
+        };
+        for id in impls {
+            let Some(impl_item) = krate.index.get(id) else {
+                continue;
+            };
+            let rustdoc_types::ItemEnum::Impl(imp) = &impl_item.inner else {
+                continue;
+            };
+            if impl_item
+                .attrs
+                .contains(&rustdoc_types::Attribute::AutomaticallyDerived)
+                && imp.trait_.as_ref().is_some_and(|trait_| {
+                    disabled_derives.contains(trait_.path.rsplit("::").next().unwrap_or(""))
+                })
+            {
+                unavailable.insert(*id);
+            }
+        }
+    }
     let mut pending = unavailable.iter().copied().collect::<Vec<_>>();
     while let Some(id) = pending.pop() {
         let item = &krate.index[&id];
@@ -860,7 +889,8 @@ fn apply_non_doc_cfg(krate: &mut Crate, cfg: &RustcCfg) -> Result<(), String> {
         }
     }
     for item in krate.index.values_mut() {
-        activate_cfg_attr_derives(&mut item.attrs, cfg);
+        reconcile_cfg_attr_deprecation(item, cfg);
+        reconcile_cfg_attr_semantics(&mut item.attrs, cfg);
     }
     for id in &unavailable {
         if let Some(item) = krate.index.get_mut(id) {
@@ -943,28 +973,20 @@ fn module_body_span(item: &rustdoc_types::Item) -> Result<rustdoc_types::Span, S
     Ok(span)
 }
 
-fn activate_cfg_attr_derives(attrs: &mut Vec<rustdoc_types::Attribute>, cfg: &RustcCfg) {
-    let mut derives = Vec::new();
-    for attr in attrs.iter() {
+fn cfg_attr_outputs(attrs: &[rustdoc_types::Attribute], cfg: &RustcCfg) -> Vec<syn::Meta> {
+    let mut outputs = Vec::new();
+    for attr in attrs {
         let rustdoc_types::Attribute::Other(attribute) = attr else {
             continue;
         };
-        let Some(expression) = retained_attribute_expression(attribute, "cfg_attr") else {
-            continue;
-        };
-        collect_cfg_attr_derives(expression, cfg, &mut derives);
+        if let Some(expression) = retained_attribute_expression(attribute, "cfg_attr") {
+            collect_cfg_attr_outputs(expression, cfg, &mut outputs);
+        }
     }
-    derives.sort();
-    derives.dedup();
-    if !derives.is_empty() {
-        attrs.push(rustdoc_types::Attribute::Other(format!(
-            "#[derive({})]",
-            derives.join(", ")
-        )));
-    }
+    outputs
 }
 
-fn collect_cfg_attr_derives(expression: &str, cfg: &RustcCfg, derives: &mut Vec<String>) {
+fn collect_cfg_attr_outputs(expression: &str, cfg: &RustcCfg, outputs: &mut Vec<syn::Meta>) {
     let Ok(nested) = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
         .parse_str(expression)
     else {
@@ -976,24 +998,256 @@ fn collect_cfg_attr_derives(expression: &str, cfg: &RustcCfg, derives: &mut Vec<
     if !cfg_meta_matches(predicate, cfg) {
         return;
     }
-    for attribute in nested.iter().skip(1) {
-        let syn::Meta::List(list) = attribute else {
-            continue;
-        };
-        match cfg_path(&list.path).as_str() {
-            "derive" => {
-                let Ok(paths) =
-                    syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
-                        .parse2(list.tokens.clone())
-                else {
-                    continue;
-                };
-                derives.extend(paths.iter().filter_map(derive_path));
-            }
-            "cfg_attr" => collect_cfg_attr_derives(&list.tokens.to_string(), cfg, derives),
-            _ => {}
+    for attribute in nested.into_iter().skip(1) {
+        if let syn::Meta::List(list) = &attribute
+            && cfg_path(&list.path) == "cfg_attr"
+        {
+            collect_cfg_attr_outputs(&list.tokens.to_string(), cfg, outputs);
+        } else {
+            outputs.push(attribute);
         }
     }
+}
+
+fn derived_names(outputs: &[syn::Meta]) -> HashSet<String> {
+    outputs
+        .iter()
+        .filter_map(|meta| match meta {
+            syn::Meta::List(list) if cfg_path(&list.path) == "derive" => Some(&list.tokens),
+            _ => None,
+        })
+        .filter_map(|tokens| {
+            syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated
+                .parse2(tokens.clone())
+                .ok()
+        })
+        .flat_map(|paths| paths.iter().filter_map(derive_path).collect::<Vec<_>>())
+        .collect()
+}
+
+fn cfg_attr_derive_difference(
+    attrs: &[rustdoc_types::Attribute],
+    cfg: &RustcCfg,
+) -> HashSet<String> {
+    let mut doc_cfg = cfg.clone();
+    doc_cfg.flags.insert("doc".into());
+    let normal = derived_names(&cfg_attr_outputs(attrs, cfg));
+    derived_names(&cfg_attr_outputs(attrs, &doc_cfg))
+        .difference(&normal)
+        .map(|name| name.rsplit("::").next().unwrap_or(name).to_string())
+        .collect()
+}
+
+fn reconcile_cfg_attr_deprecation(item: &mut rustdoc_types::Item, cfg: &RustcCfg) {
+    let mut doc_cfg = cfg.clone();
+    doc_cfg.flags.insert("doc".into());
+    let doc = cfg_attr_deprecation(&cfg_attr_outputs(&item.attrs, &doc_cfg));
+    let normal = cfg_attr_deprecation(&cfg_attr_outputs(&item.attrs, cfg));
+    if doc != normal && item.deprecation == doc {
+        item.deprecation = normal;
+    }
+}
+
+fn cfg_attr_deprecation(outputs: &[syn::Meta]) -> Option<rustdoc_types::Deprecation> {
+    outputs.iter().find_map(|meta| match meta {
+        syn::Meta::Path(path) if cfg_path(path) == "deprecated" => {
+            Some(rustdoc_types::Deprecation {
+                since: None,
+                note: None,
+            })
+        }
+        syn::Meta::NameValue(value) if cfg_path(&value.path) == "deprecated" => {
+            let syn::Expr::Lit(value) = &value.value else {
+                return None;
+            };
+            let syn::Lit::Str(note) = &value.lit else {
+                return None;
+            };
+            Some(rustdoc_types::Deprecation {
+                since: None,
+                note: Some(note.value()),
+            })
+        }
+        syn::Meta::List(list) if cfg_path(&list.path) == "deprecated" => {
+            let fields = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+                .parse2(list.tokens.clone())
+                .ok()?;
+            let mut deprecation = rustdoc_types::Deprecation {
+                since: None,
+                note: None,
+            };
+            for field in fields {
+                let syn::Meta::NameValue(field) = field else {
+                    continue;
+                };
+                let syn::Expr::Lit(value) = field.value else {
+                    continue;
+                };
+                let syn::Lit::Str(value) = value.lit else {
+                    continue;
+                };
+                match cfg_path(&field.path).as_str() {
+                    "since" => deprecation.since = Some(value.value()),
+                    "note" => deprecation.note = Some(value.value()),
+                    _ => {}
+                }
+            }
+            Some(deprecation)
+        }
+        _ => None,
+    })
+}
+
+fn reconcile_cfg_attr_semantics(attrs: &mut Vec<rustdoc_types::Attribute>, cfg: &RustcCfg) {
+    let mut doc_cfg = cfg.clone();
+    doc_cfg.flags.insert("doc".into());
+    let doc = cfg_attr_outputs(attrs, &doc_cfg);
+    let normal = cfg_attr_outputs(attrs, cfg);
+
+    let mut derives = derived_names(&normal).into_iter().collect::<Vec<_>>();
+    derives.sort();
+    if !derives.is_empty() {
+        attrs.push(rustdoc_types::Attribute::Other(format!(
+            "#[derive({})]",
+            derives.join(", ")
+        )));
+    }
+
+    let doc_semantics = semantic_cfg_attr_outputs(&doc);
+    let normal_semantics = semantic_cfg_attr_outputs(&normal);
+    for attribute in &doc_semantics {
+        if !normal_semantics.contains(attribute)
+            && let Some(position) = attrs.iter().position(|attr| attr == attribute)
+        {
+            attrs.remove(position);
+        }
+    }
+    for attribute in normal_semantics {
+        if !doc_semantics.contains(&attribute) && !attrs.contains(&attribute) {
+            attrs.push(attribute);
+        }
+    }
+
+    let doc_repr = cfg_attr_repr(&doc);
+    let normal_repr = cfg_attr_repr(&normal);
+    if doc_repr != normal_repr {
+        let position = attrs
+            .iter()
+            .position(|attr| matches!(attr, rustdoc_types::Attribute::Repr(_)));
+        let mut repr = position
+            .and_then(|position| match &attrs[position] {
+                rustdoc_types::Attribute::Repr(repr) => Some(repr.clone()),
+                _ => None,
+            })
+            .unwrap_or(rustdoc_types::AttributeRepr {
+                kind: rustdoc_types::ReprKind::Rust,
+                align: None,
+                packed: None,
+                int: None,
+            });
+        if doc_repr.kind != normal_repr.kind && repr.kind == doc_repr.kind {
+            repr.kind = rustdoc_types::ReprKind::Rust;
+        }
+        if doc_repr.int != normal_repr.int && repr.int == doc_repr.int {
+            repr.int = None;
+        }
+        if doc_repr.align != normal_repr.align && repr.align == doc_repr.align {
+            repr.align = None;
+        }
+        if doc_repr.packed != normal_repr.packed && repr.packed == doc_repr.packed {
+            repr.packed = None;
+        }
+        if normal_repr.kind != rustdoc_types::ReprKind::Rust {
+            repr.kind = normal_repr.kind;
+        }
+        repr.int = normal_repr.int.or(repr.int);
+        repr.align = normal_repr.align.or(repr.align);
+        repr.packed = normal_repr.packed.or(repr.packed);
+        if let Some(position) = position {
+            attrs.remove(position);
+        }
+        if repr.kind != rustdoc_types::ReprKind::Rust
+            || repr.int.is_some()
+            || repr.align.is_some()
+            || repr.packed.is_some()
+        {
+            attrs.push(rustdoc_types::Attribute::Repr(repr));
+        }
+    }
+}
+
+fn semantic_cfg_attr_outputs(outputs: &[syn::Meta]) -> Vec<rustdoc_types::Attribute> {
+    outputs
+        .iter()
+        .filter_map(|meta| match meta {
+            syn::Meta::Path(path) if cfg_path(path) == "non_exhaustive" => {
+                Some(rustdoc_types::Attribute::NonExhaustive)
+            }
+            syn::Meta::Path(path) if cfg_path(path) == "must_use" => {
+                Some(rustdoc_types::Attribute::MustUse { reason: None })
+            }
+            syn::Meta::NameValue(value) if cfg_path(&value.path) == "must_use" => {
+                let syn::Expr::Lit(value) = &value.value else {
+                    return None;
+                };
+                let syn::Lit::Str(reason) = &value.lit else {
+                    return None;
+                };
+                Some(rustdoc_types::Attribute::MustUse {
+                    reason: Some(reason.value()),
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn cfg_attr_repr(outputs: &[syn::Meta]) -> rustdoc_types::AttributeRepr {
+    let mut repr = rustdoc_types::AttributeRepr {
+        kind: rustdoc_types::ReprKind::Rust,
+        align: None,
+        packed: None,
+        int: None,
+    };
+    for meta in outputs {
+        let syn::Meta::List(list) = meta else {
+            continue;
+        };
+        if cfg_path(&list.path) != "repr" {
+            continue;
+        }
+        let Ok(parts) = syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated
+            .parse2(list.tokens.clone())
+        else {
+            continue;
+        };
+        for part in parts {
+            match &part {
+                syn::Meta::Path(path) => match cfg_path(path).as_str() {
+                    "C" => repr.kind = rustdoc_types::ReprKind::C,
+                    "transparent" => repr.kind = rustdoc_types::ReprKind::Transparent,
+                    "simd" => repr.kind = rustdoc_types::ReprKind::Simd,
+                    "Rust" => repr.kind = rustdoc_types::ReprKind::Rust,
+                    "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32"
+                    | "i64" | "i128" | "isize" => repr.int = Some(cfg_path(path)),
+                    "packed" => repr.packed = Some(1),
+                    _ => {}
+                },
+                syn::Meta::List(part) => {
+                    let value = syn::parse2::<syn::LitInt>(part.tokens.clone())
+                        .ok()
+                        .and_then(|value| value.base10_parse().ok());
+                    match cfg_path(&part.path).as_str() {
+                        "align" => repr.align = value,
+                        "packed" => repr.packed = value,
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    repr
 }
 
 fn derive_path(path: &syn::Path) -> Option<String> {
@@ -3079,7 +3333,7 @@ mod tests {
         ];
         let cfg = RustcCfg::parse(b"feature=\"enabled\"\nunix\n");
 
-        activate_cfg_attr_derives(&mut attrs, &cfg);
+        reconcile_cfg_attr_semantics(&mut attrs, &cfg);
 
         assert!(attrs.iter().any(|attribute| {
             matches!(
@@ -3113,7 +3367,7 @@ mod tests {
         let mut attrs = vec![rustdoc_types::Attribute::Other(
             "#[<cfg_attr>(r#async, derive(RawEnabled))]".into(),
         )];
-        activate_cfg_attr_derives(&mut attrs, &cfg);
+        reconcile_cfg_attr_semantics(&mut attrs, &cfg);
         assert!(attrs.iter().any(|attribute| {
             matches!(
                 attribute,

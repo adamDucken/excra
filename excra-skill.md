@@ -206,8 +206,11 @@ Consequences:
   Retained item cfg expressions are evaluated against the exact non-doc cfg set from
   the matched compiler-wrapper invocation, so documentation-only platform APIs and
   disabled conditional derives are excluded while APIs and derives valid for the
-  selected target/profile/features remain available. Disabled lexical ancestors also
-  invalidate nested members and impls on types declared elsewhere. Inline module
+  selected target/profile/features remain available. Conditional `repr`,
+  `non_exhaustive`, `must_use`, and deprecation details follow that same cfg set;
+  automatically derived impls emitted only under `cfg(doc)` are omitted.
+  Disabled lexical ancestors also invalidate nested members and impls on types
+  declared elsewhere. Inline module
   bodies are recovered from local source because Rustdoc omits their impl children;
   unavailable source needed for this check produces an extraction error.
   If a source cfg affecting the requested item is enabled in the selected
