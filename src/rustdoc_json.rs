@@ -12,6 +12,7 @@ use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 use syn::parse::Parser;
+use syn::spanned::Spanned;
 
 const PINNED_TOOLCHAIN: &str = "nightly-2025-09-10";
 const GENERATION_MARKER: &str = "excra managed generation\n";
@@ -822,7 +823,325 @@ pub(crate) fn reject_non_doc_only_source(
             ));
         }
     }
+    reject_non_doc_expansion(krate, json_path, import)
+}
+
+fn reject_non_doc_expansion(
+    krate: &Crate,
+    json_path: &Path,
+    import: &crate::imports::ImportPath,
+) -> Result<(), String> {
+    let normal_path = json_path.with_extension("normal.rs");
+    let doc_path = json_path.with_extension("doc.rs");
+    let normal = fs::read_to_string(&normal_path).map_err(|error| {
+        format!(
+            "cannot read normal compiler expansion {}: {error}",
+            normal_path.display()
+        )
+    })?;
+    let doc = fs::read_to_string(&doc_path).map_err(|error| {
+        format!(
+            "cannot read doc compiler expansion {}: {error}",
+            doc_path.display()
+        )
+    })?;
+    let mut paths = vec![import.clone()];
+    if let Ok(report) = crate::symbols::find_symbol_report(krate, import)
+        && let Some(summary) = krate.paths.get(&report.resolved_id)
+        && summary.crate_id == 0
+        && summary.path.len() > 1
+    {
+        let path = &summary.path[1..];
+        let canonical = crate::imports::ImportPath {
+            crate_name: import.crate_name.clone(),
+            segments: path[..path.len() - 1].to_vec(),
+            item: path[path.len() - 1].clone(),
+            namespace: import.namespace,
+        };
+        if canonical.full_path() != import.full_path() {
+            paths.push(canonical);
+        }
+    }
+    for path in paths {
+        let normal = expanded_api_shape(&normal, &path)?;
+        let doc = expanded_api_shape(&doc, &path)?;
+        if let Some(missing) = normal.difference(&doc).min() {
+            return Err(format!(
+                "non-doc API extraction is incomplete: compiler expansion for '{}' contains {missing}, which is absent under cfg(doc)",
+                path.full_path()
+            ));
+        }
+    }
     Ok(())
+}
+
+fn expanded_api_shape(
+    source: &str,
+    import: &crate::imports::ImportPath,
+) -> Result<HashSet<String>, String> {
+    use syn::{Fields, ImplItem, Item, Visibility};
+    let file = syn::parse_file(source)
+        .map_err(|error| format!("cannot parse selected compiler expansion: {error}"))?;
+    let mut wanted = import
+        .segments
+        .iter()
+        .map(|part| crate::imports::identifier_key(part).to_string())
+        .collect::<Vec<_>>();
+    wanted.push(crate::imports::identifier_key(&import.item).to_string());
+    let mut shapes = HashSet::new();
+
+    fn text(source: &str, span: proc_macro2::Span) -> Result<&str, String> {
+        let starts = std::iter::once(0)
+            .chain(source.match_indices('\n').map(|(index, _)| index + 1))
+            .collect::<Vec<_>>();
+        let start = span.start();
+        let end = span.end();
+        let start = starts
+            .get(start.line.saturating_sub(1))
+            .and_then(|line| line.checked_add(start.column))
+            .ok_or("compiler expansion has an invalid start span")?;
+        let end = starts
+            .get(end.line.saturating_sub(1))
+            .and_then(|line| line.checked_add(end.column))
+            .ok_or("compiler expansion has an invalid end span")?;
+        source
+            .get(start..end)
+            .ok_or_else(|| "compiler expansion has an invalid UTF-8 span".to_string())
+    }
+    fn visibility(source: &str, vis: &Visibility) -> Result<String, String> {
+        match vis {
+            Visibility::Inherited => Ok(String::new()),
+            _ => Ok(text(source, vis.span())?.to_string()),
+        }
+    }
+    fn fields(
+        source: &str,
+        fields: &Fields,
+        prefix: &str,
+        shapes: &mut HashSet<String>,
+    ) -> Result<(), String> {
+        let kind = match fields {
+            Fields::Named(_) => "named",
+            Fields::Unnamed(_) => "tuple",
+            Fields::Unit => "unit",
+        };
+        shapes.insert(format!("{prefix} {kind} fields"));
+        for (index, field) in fields.iter().enumerate() {
+            let name = field
+                .ident
+                .as_ref()
+                .map_or_else(|| index.to_string(), ToString::to_string);
+            shapes.insert(format!(
+                "{prefix} field {name}: {} {}",
+                visibility(source, &field.vis)?,
+                text(source, field.ty.span())?
+            ));
+        }
+        Ok(())
+    }
+    fn use_may_bind(tree: &syn::UseTree, wanted: &str) -> bool {
+        match tree {
+            syn::UseTree::Path(path) => use_may_bind(&path.tree, wanted),
+            syn::UseTree::Name(name) => {
+                crate::imports::identifier_key(&name.ident.to_string()) == wanted
+            }
+            syn::UseTree::Rename(name) => {
+                crate::imports::identifier_key(&name.rename.to_string()) == wanted
+            }
+            syn::UseTree::Glob(_) => true,
+            syn::UseTree::Group(group) => group.items.iter().any(|tree| use_may_bind(tree, wanted)),
+        }
+    }
+    fn walk(
+        source: &str,
+        items: &[Item],
+        modules: &mut Vec<String>,
+        wanted: &[String],
+        shapes: &mut HashSet<String>,
+    ) -> Result<(), String> {
+        for item in items {
+            if let Item::Mod(module) = item {
+                modules.push(crate::imports::identifier_key(&module.ident.to_string()).to_string());
+                if modules == wanted {
+                    shapes.insert(format!("module {}", visibility(source, &module.vis)?));
+                }
+                if let Some((_, children)) = &module.content {
+                    walk(source, children, modules, wanted, shapes)?;
+                }
+                modules.pop();
+                continue;
+            }
+            let name = match item {
+                Item::Struct(item) => Some(&item.ident),
+                Item::Enum(item) => Some(&item.ident),
+                Item::Union(item) => Some(&item.ident),
+                Item::Fn(item) => Some(&item.sig.ident),
+                Item::Trait(item) => Some(&item.ident),
+                Item::TraitAlias(item) => Some(&item.ident),
+                Item::Type(item) => Some(&item.ident),
+                Item::Const(item) => Some(&item.ident),
+                Item::Static(item) => Some(&item.ident),
+                Item::ExternCrate(item) => {
+                    Some(item.rename.as_ref().map_or(&item.ident, |(_, name)| name))
+                }
+                Item::Macro(item) => item.ident.as_ref(),
+                _ => None,
+            };
+            let matches = name.is_some_and(|name| {
+                modules.len() + 1 == wanted.len()
+                    && modules == &wanted[..modules.len()]
+                    && crate::imports::identifier_key(&name.to_string()) == wanted[modules.len()]
+            });
+            if matches {
+                match item {
+                    Item::Struct(item) => {
+                        shapes.insert(format!(
+                            "struct {} {}",
+                            visibility(source, &item.vis)?,
+                            text(source, item.generics.span())?
+                        ));
+                        fields(source, &item.fields, "struct", shapes)?;
+                    }
+                    Item::Enum(item) => {
+                        shapes.insert(format!(
+                            "enum {} {}",
+                            visibility(source, &item.vis)?,
+                            text(source, item.generics.span())?
+                        ));
+                        for variant in &item.variants {
+                            let prefix = format!("variant {}", variant.ident);
+                            shapes.insert(prefix.clone());
+                            fields(source, &variant.fields, &prefix, shapes)?;
+                            if let Some((_, discriminant)) = &variant.discriminant {
+                                shapes.insert(format!(
+                                    "{prefix} discriminant {}",
+                                    text(source, discriminant.span())?
+                                ));
+                            }
+                        }
+                    }
+                    Item::Union(item) => {
+                        shapes.insert(format!(
+                            "union {} {}",
+                            visibility(source, &item.vis)?,
+                            text(source, item.generics.span())?
+                        ));
+                        for field in &item.fields.named {
+                            shapes.insert(format!(
+                                "union field {}: {} {}",
+                                field.ident.as_ref().expect("union fields are named"),
+                                visibility(source, &field.vis)?,
+                                text(source, field.ty.span())?
+                            ));
+                        }
+                    }
+                    Item::Fn(item) => {
+                        shapes.insert(format!(
+                            "fn {} {}",
+                            visibility(source, &item.vis)?,
+                            text(source, item.sig.span())?
+                        ));
+                    }
+                    Item::Trait(item) => {
+                        shapes.insert(format!(
+                            "trait {} {} {}",
+                            visibility(source, &item.vis)?,
+                            text(source, item.generics.span())?,
+                            text(source, item.supertraits.span())?
+                        ));
+                        for member in &item.items {
+                            match member {
+                                syn::TraitItem::Fn(method) => {
+                                    shapes.insert(format!(
+                                        "trait method {}",
+                                        text(source, method.sig.span())?
+                                    ));
+                                }
+                                syn::TraitItem::Const(constant) => {
+                                    shapes.insert(format!(
+                                        "trait const {}: {}",
+                                        constant.ident,
+                                        text(source, constant.ty.span())?
+                                    ));
+                                }
+                                syn::TraitItem::Type(ty) => {
+                                    shapes.insert(format!(
+                                        "trait type {}: {}",
+                                        ty.ident,
+                                        text(source, ty.bounds.span())?
+                                    ));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    _ => {
+                        shapes.insert(format!("item {}", text(source, item.span())?));
+                    }
+                }
+            }
+            if let Item::Use(item) = item
+                && modules == &wanted[..wanted.len() - 1]
+                && use_may_bind(&item.tree, &wanted[wanted.len() - 1])
+            {
+                shapes.insert(format!(
+                    "use {} {}",
+                    visibility(source, &item.vis)?,
+                    text(source, item.tree.span())?
+                ));
+            }
+            if let Item::Impl(imp) = item
+                && let syn::Type::Path(self_ty) = imp.self_ty.as_ref()
+                && self_ty.path.segments.last().is_some_and(|segment| {
+                    crate::imports::identifier_key(&segment.ident.to_string())
+                        == wanted[wanted.len() - 1]
+                })
+                && !imp
+                    .attrs
+                    .iter()
+                    .any(|attr| attr.path().is_ident("automatically_derived"))
+            {
+                let owner = text(source, imp.self_ty.span())?;
+                let trait_name = imp
+                    .trait_
+                    .as_ref()
+                    .map(|(_, path, _)| text(source, path.span()))
+                    .transpose()?
+                    .unwrap_or_default();
+                let generics = text(source, imp.generics.span())?;
+                for member in &imp.items {
+                    let signature = match member {
+                        ImplItem::Fn(method) => Some(format!(
+                            "{} {}",
+                            visibility(source, &method.vis)?,
+                            text(source, method.sig.span())?
+                        )),
+                        ImplItem::Const(constant) => Some(format!(
+                            "const {}: {} = {}",
+                            constant.ident,
+                            text(source, constant.ty.span())?,
+                            text(source, constant.expr.span())?
+                        )),
+                        ImplItem::Type(ty) => Some(format!(
+                            "type {} = {}",
+                            ty.ident,
+                            text(source, ty.ty.span())?
+                        )),
+                        _ => None,
+                    };
+                    if let Some(signature) = signature {
+                        shapes.insert(format!(
+                            "impl{generics} {trait_name} for {owner}: {signature}"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    walk(source, &file.items, &mut Vec::new(), &wanted, &mut shapes)?;
+    Ok(shapes)
 }
 
 fn apply_non_doc_cfg(krate: &mut Crate, cfg: &RustcCfg) -> Result<(), String> {
@@ -1764,6 +2083,40 @@ pub(crate) fn run_rustc_wrapper() -> ! {
             cfg_path.display()
         );
         std::process::exit(1);
+    }
+    for (label, doc) in [("normal", false), ("doc", true)] {
+        let mut expanded = if let Some(wrapper) = &original_wrapper {
+            let mut command = Command::new(wrapper);
+            command.arg(compiler);
+            command
+        } else {
+            Command::new(compiler)
+        };
+        expanded.args(&command_arguments[1..]);
+        if doc {
+            expanded.args(["--cfg", "doc"]);
+        }
+        let output = expanded
+            .arg("-Zunpretty=expanded")
+            .output()
+            .unwrap_or_else(|err| {
+                eprintln!("excra failed to expand the selected {label} unit: {err}");
+                std::process::exit(1);
+            });
+        if !output.status.success() {
+            eprintln!(
+                "excra failed to expand the selected {label} unit: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+            std::process::exit(output.status.code().unwrap_or(1));
+        }
+        if let Err(err) = fs::write(
+            cfg_path.with_extension(format!("{label}.rs")),
+            output.stdout,
+        ) {
+            eprintln!("excra failed to save the selected {label} expansion: {err}");
+            std::process::exit(1);
+        }
     }
     let mut artifact_compiler = original_wrapper.iter().cloned().collect::<Vec<_>>();
     artifact_compiler.extend_from_slice(

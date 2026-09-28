@@ -452,6 +452,28 @@ fn resolve_query(
             }
         })
     };
+    let reject_missing_valid_import = || {
+        if !is_root_query {
+            return Ok(());
+        }
+        match rustdoc_json::validate_import(&json_path, import) {
+            Ok(()) => Err(QueryError::Incomplete(format!(
+                "non-doc API extraction is incomplete: compiler accepted import '{}' but Rustdoc JSON omitted it",
+                import.full_path()
+            ))),
+            Err(error)
+                if error.contains("error[E0432]")
+                    || error.contains("error[E0433]")
+                    || error.contains("error[E0603]") =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(QueryError::Incomplete(format!(
+                "could not validate missing import '{}': {error}",
+                import.full_path()
+            ))),
+        }
+    };
     let local_result = symbols::find_symbol_report(&krate, import);
     if let Err(SymbolError::Ambiguous(message)) = &local_result {
         return Err(QueryError::Incomplete(format!(
@@ -483,6 +505,7 @@ fn resolve_query(
                 })
             }
             Err(local_error) => {
+                reject_missing_valid_import()?;
                 let message = not_found_message(
                     import,
                     &package.name,
@@ -715,6 +738,7 @@ fn resolve_query(
             import.full_path()
         ))),
         _ => {
+            reject_missing_valid_import()?;
             let mut message = not_found_message(
                 import,
                 &package.name,
