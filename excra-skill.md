@@ -209,6 +209,8 @@ Consequences:
   selected target/profile/features remain available. Conditional `repr`,
   `non_exhaustive`, `must_use`, and deprecation details follow that same cfg set;
   automatically derived impls emitted only under `cfg(doc)` are omitted.
+  Derived trait impl headers present only in the selected non-doc compiler
+  expansion are included in the report, even when Rustdoc JSON omits them.
   Disabled lexical ancestors also invalidate nested members and impls on types
   declared elsewhere. Inline module
   bodies are recovered from local source because Rustdoc omits their impl children;

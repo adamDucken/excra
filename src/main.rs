@@ -422,8 +422,9 @@ fn resolve_query(
     .map_err(QueryError::Incomplete)?;
     let krate = selected_docs.krate;
     let json_path = selected_docs.json_path;
-    rustdoc_json::reject_non_doc_only_source(&krate, target, &json_path, import)
-        .map_err(QueryError::Incomplete)?;
+    let missing_impls =
+        rustdoc_json::reject_non_doc_only_source(&krate, target, &json_path, import)
+            .map_err(QueryError::Incomplete)?;
     let child_parent = rustdoc_json::CargoParentUnit {
         package_id: package.id.to_string(),
         graph_index: selected_docs.unit.graph_index,
@@ -493,8 +494,12 @@ fn resolve_query(
     })?;
     if external_candidates.is_empty() {
         return match local_result {
-            Ok(symbols) => {
+            Ok(mut symbols) => {
                 validate_candidate()?;
+                let doc = symbols.resolved.as_mut().unwrap_or(&mut symbols.imported);
+                doc.impls.extend(missing_impls);
+                doc.impls.sort();
+                doc.impls.dedup();
                 Ok(ResolvedQuery {
                     symbols,
                     crate_name: package.name.clone(),

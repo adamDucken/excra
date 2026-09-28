@@ -2245,6 +2245,100 @@ pub struct NormalDeprecated;
     );
 }
 
+#[test]
+fn binary_restores_derive_impls_missing_from_rustdoc() {
+    let workspace = TempDir::new().unwrap();
+    fs::write(
+        workspace.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"app\", \"dep\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    write_member(
+        &workspace,
+        "app",
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\ndep = { path = \"../dep\" }\n",
+        "pub fn verify() { fn needs_clone<T: Clone>() {} needs_clone::<dep::Token>(); needs_clone::<dep::Plain>(); needs_clone::<dep::Generic<String>>(); }",
+    );
+    write_member(
+        &workspace,
+        "dep",
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "#[cfg_attr(not(doc), derive(Clone))] pub struct Token;\n#[derive(Clone)] pub struct Plain;\n#[cfg_attr(not(doc), derive(Clone))] pub struct Generic<T>(pub T);\n",
+    );
+    lock_workspace(&workspace);
+    let normal = Command::new("cargo")
+        .args(["check", "--offline", "--locked", "-p", "app"])
+        .current_dir(workspace.path())
+        .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+        .output()
+        .unwrap();
+    assert!(
+        normal.status.success(),
+        "{}",
+        String::from_utf8_lossy(&normal.stderr)
+    );
+
+    let query = |item| {
+        Command::new(env!("CARGO_BIN_EXE_excra"))
+            .args([
+                format!("use dep::{item};"),
+                "--root".into(),
+                workspace.path().to_str().unwrap().into(),
+                "--package".into(),
+                "app".into(),
+            ])
+            .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+            .output()
+            .unwrap()
+    };
+    let plain = query("Plain");
+    assert!(
+        plain.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plain.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&plain.stdout);
+    assert!(stdout.contains("derives: Clone\n"), "{stdout}");
+    assert!(stdout.contains("impl Clone for Plain"), "{stdout}");
+
+    let token = query("Token");
+    assert!(
+        token.status.success(),
+        "{}",
+        String::from_utf8_lossy(&token.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&token.stdout);
+    assert!(stdout.contains("derives: Clone\n"), "{stdout}");
+    assert!(
+        stdout.contains("impls:\n  impl Clone for Token\n"),
+        "{stdout}"
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&fs::read(report_source(&stdout)).unwrap()).unwrap();
+    let index = json["index"].as_object().unwrap();
+    let token = index.values().find(|item| item["name"] == "Token").unwrap();
+    assert!(
+        !token["inner"]["struct"]["impls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|id| index[&id.to_string()]["inner"]["impl"]["trait"]["path"] == "Clone")
+    );
+
+    let generic = query("Generic");
+    assert!(
+        generic.status.success(),
+        "{}",
+        String::from_utf8_lossy(&generic.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&generic.stdout);
+    assert!(stdout.contains("derives: Clone\n"), "{stdout}");
+    assert!(
+        stdout.contains("impl<T: ::core::clone::Clone> Clone for Generic<T>"),
+        "{stdout}"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn binary_composes_with_a_general_cfg_injecting_rustc_wrapper() {

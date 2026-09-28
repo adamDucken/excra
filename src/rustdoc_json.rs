@@ -614,7 +614,7 @@ pub(crate) fn reject_non_doc_only_source(
     target: &Target,
     json_path: &Path,
     import: &crate::imports::ImportPath,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let cfg = load_rustc_cfg(&json_path.with_extension("cfg"))?;
     let mut sources = krate
         .index
@@ -830,7 +830,7 @@ fn reject_non_doc_expansion(
     krate: &Crate,
     json_path: &Path,
     import: &crate::imports::ImportPath,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let normal_path = json_path.with_extension("normal.rs");
     let doc_path = json_path.with_extension("doc.rs");
     let normal = fs::read_to_string(&normal_path).map_err(|error| {
@@ -862,17 +862,24 @@ fn reject_non_doc_expansion(
             paths.push(canonical);
         }
     }
+    let mut missing_impls = Vec::new();
     for path in paths {
         let normal = expanded_api_shape(&normal, &path)?;
         let doc = expanded_api_shape(&doc, &path)?;
-        if let Some(missing) = normal.difference(&doc).min() {
-            return Err(format!(
-                "non-doc API extraction is incomplete: compiler expansion for '{}' contains {missing}, which is absent under cfg(doc)",
-                path.full_path()
-            ));
+        for missing in normal.difference(&doc) {
+            if let Some(impl_header) = missing.strip_prefix("derived ") {
+                missing_impls.push(impl_header.to_string());
+            } else {
+                return Err(format!(
+                    "non-doc API extraction is incomplete: compiler expansion for '{}' contains {missing}, which is absent under cfg(doc)",
+                    path.full_path()
+                ));
+            }
         }
     }
-    Ok(())
+    missing_impls.sort();
+    missing_impls.dedup();
+    Ok(missing_impls)
 }
 
 fn expanded_api_shape(
@@ -1091,15 +1098,12 @@ fn expanded_api_shape(
                 ));
             }
             if let Item::Impl(imp) = item
+                && modules == &wanted[..wanted.len() - 1]
                 && let syn::Type::Path(self_ty) = imp.self_ty.as_ref()
                 && self_ty.path.segments.last().is_some_and(|segment| {
                     crate::imports::identifier_key(&segment.ident.to_string())
                         == wanted[wanted.len() - 1]
                 })
-                && !imp
-                    .attrs
-                    .iter()
-                    .any(|attr| attr.path().is_ident("automatically_derived"))
             {
                 let owner = text(source, imp.self_ty.span())?;
                 let trait_name = imp
@@ -1108,6 +1112,43 @@ fn expanded_api_shape(
                     .map(|(_, path, _)| text(source, path.span()))
                     .transpose()?
                     .unwrap_or_default();
+                if imp
+                    .attrs
+                    .iter()
+                    .any(|attr| attr.path().is_ident("automatically_derived"))
+                    && imp.trait_.is_some()
+                {
+                    let (_, trait_path, _) = imp.trait_.as_ref().unwrap();
+                    let trait_name = if trait_path.leading_colon.is_some()
+                        && trait_path.segments.first().is_some_and(|segment| {
+                            segment.ident == "core" || segment.ident == "std"
+                        }) {
+                        trait_path.segments.last().unwrap().ident.to_string()
+                    } else {
+                        trait_name.to_string()
+                    };
+                    let generics = if imp.generics.params.is_empty() {
+                        String::new()
+                    } else {
+                        format!("<{}>", text(source, imp.generics.params.span())?)
+                    };
+                    let where_clause = imp
+                        .generics
+                        .where_clause
+                        .as_ref()
+                        .map(|clause| text(source, clause.span()))
+                        .transpose()?
+                        .map_or_else(String::new, |clause| format!(" {clause}"));
+                    let safety = if imp.unsafety.is_some() {
+                        "unsafe "
+                    } else {
+                        ""
+                    };
+                    shapes.insert(format!(
+                        "derived {safety}impl{generics} {trait_name} for {owner}{where_clause}"
+                    ));
+                    continue;
+                }
                 let generics = text(source, imp.generics.span())?;
                 for member in &imp.items {
                     let signature = match member {
