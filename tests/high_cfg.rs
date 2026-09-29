@@ -258,17 +258,17 @@ fn procedural_macro_api_changes_report_incomplete_extraction() {
             "{name}: {}",
             String::from_utf8_lossy(&output.stdout)
         );
+        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            String::from_utf8_lossy(&output.stderr)
-                .contains("non-doc API extraction is incomplete: compiler expansion"),
-            "{name}: {}",
-            String::from_utf8_lossy(&output.stderr)
+            stderr.contains("non-doc API extraction is incomplete:"),
+            "{name}: {stderr}"
         );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains(missing),
-            "{name}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+        if name == "Included" {
+            assert!(stderr.contains("included.rs"), "{name}: {stderr}");
+        } else {
+            assert!(stderr.contains("compiler expansion"), "{name}: {stderr}");
+            assert!(stderr.contains(missing), "{name}: {stderr}");
+        }
     }
     let missing_glob = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([

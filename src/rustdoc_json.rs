@@ -2205,6 +2205,7 @@ pub(crate) fn run_rustc_wrapper() -> ! {
             "--output-format",
             "json",
             "--document-private-items",
+            "--document-hidden-items",
             "-o",
         ])
         .arg(&doc_dir)

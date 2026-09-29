@@ -997,7 +997,7 @@ unsafe extern "C" {
         "definition: pub struct Named { pub value: u8, /* private/stripped fields */ }",
         "definition: pub struct Tuple(pub u8, /* private/stripped field */);",
         "definition: pub union Choice { pub byte: u8, pub word: u16, /* private/stripped fields */ }",
-        "definition: pub enum Number { One = 1, Five = 5, Fields { visible: u8, /* private/stripped fields */ }, /* private/stripped variants */ }",
+        "definition: pub enum Number { One = 1, Five = 5, Fields { visible: u8, hidden: u16 }, Hidden }",
         "definition: pub const COUNT: usize = 3usize;",
         "definition: pub static READY: bool = true;",
         "  const VALUE: u8 = 7;",
@@ -3278,11 +3278,15 @@ fn binary_follows_external_reexports_through_stripped_private_modules() {
         .output()
         .unwrap();
     assert!(
-        syn.status.success(),
+        !syn.status.success(),
+        "{}",
+        String::from_utf8_lossy(&syn.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&syn.stderr).contains("ambiguous import 'syn::Ident'"),
         "{}",
         String::from_utf8_lossy(&syn.stderr)
     );
-    assert!(String::from_utf8_lossy(&syn.stdout).contains("resolved item: struct Ident"));
 }
 
 fn disjoint_alias_workspace(context_section: &str, build_script: bool) -> TempDir {

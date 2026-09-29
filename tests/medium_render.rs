@@ -35,10 +35,22 @@ where
     /// Largest supported value.
     pub const MAX: usize = 8;
 
+    #[doc(hidden)]
+    pub const HIDDEN: usize = 9;
+
+    #[doc(hidden)]
+    const PRIVATE_HIDDEN: usize = 10;
+
     /// Inspect the old limit.
     #[deprecated(since = "0.2.0", note = "use MAX")]
     #[must_use = "inspect the limit"]
     pub fn old(&self) -> usize { Self::MAX }
+
+    #[doc(hidden)]
+    pub fn hidden_callable(&self) -> usize { Self::HIDDEN }
+
+    #[doc(hidden)]
+    fn private_hidden(&self) -> usize { Self::PRIVATE_HIDDEN }
 
     /// Reads without checks.
     ///
@@ -68,6 +80,9 @@ pub trait Contract {
     /// Check the contract.
     #[must_use]
     fn check(&self) -> bool;
+
+    #[doc(hidden)]
+    fn hidden_required(&self);
 
     /// Stable identifier.
     #[deprecated(note = "use NEW_ID")]
@@ -110,14 +125,21 @@ pub trait Contract {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.contains(
-        "methods:\n  impl<T> Limits<T> where T: Copy { pub fn old(self: &Self) -> usize }\n    deprecation:\n      since: 0.2.0\n      note: use MAX\n    attributes:\n      #[must_use = \"inspect the limit\"]\n    docs:\n      Inspect the old limit.\n"
+        "  impl<T> Limits<T> where T: Copy { pub fn old(self: &Self) -> usize }\n    deprecation:\n      since: 0.2.0\n      note: use MAX\n    attributes:\n      #[must_use = \"inspect the limit\"]\n    docs:\n      Inspect the old limit.\n"
     ), "{stdout}");
     assert!(stdout.contains(
         "  impl<T> Limits<T> where T: Copy { pub unsafe fn unchecked(self: &Self) -> usize }\n    docs:\n      Reads without checks.\n      \n      # Safety\n      The caller must uphold the limit invariant.\n"
     ), "{stdout}");
     assert!(stdout.contains(
-        "associated constants:\n  impl<T> Limits<T> where T: Copy { pub const MAX: usize = 8; }\n    docs:\n      Largest supported value.\n"
+        "  impl<T> Limits<T> where T: Copy { pub const MAX: usize = 8; }\n    docs:\n      Largest supported value.\n"
     ), "{stdout}");
+    assert!(
+        stdout.contains("pub fn hidden_callable(self: &Self) -> usize"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("pub const HIDDEN: usize = 9;"), "{stdout}");
+    assert!(!stdout.contains("private_hidden"), "{stdout}");
+    assert!(!stdout.contains("PRIVATE_HIDDEN"), "{stdout}");
 
     assert!(stdout.contains(
         "details:\n  Record { value: u8 }\n    attributes:\n      #[non_exhaustive]\n    docs:\n      Cannot be exhaustively constructed.\n    members:\n      value: u8\n        deprecation:\n          note: use replacement\n        docs:\n          Stored byte.\n"
@@ -138,6 +160,10 @@ pub trait Contract {
         "{reexport}"
     );
     assert!(stdout.contains(
-        "details:\n  fn check(self: &Self) -> bool;\n    attributes:\n      #[must_use]\n    docs:\n      Check the contract.\n  const ID: u8 = 4;\n    deprecation:\n      note: use NEW_ID\n    docs:\n      Stable identifier.\n"
+        "details:\n  fn check(self: &Self) -> bool;\n    attributes:\n      #[must_use]\n    docs:\n      Check the contract.\n  fn hidden_required(self: &Self);\n  const ID: u8 = 4;\n    deprecation:\n      note: use NEW_ID\n    docs:\n      Stable identifier.\n"
     ), "{stdout}");
+    assert!(
+        stdout.contains("  fn hidden_required(self: &Self);\n"),
+        "{stdout}"
+    );
 }
