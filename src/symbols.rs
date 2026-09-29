@@ -282,6 +282,7 @@ pub(crate) fn imported_reexport(
 pub(crate) fn external_reexports(
     krate: &Crate,
     import: &ImportPath,
+    root_relative_bare_uses: bool,
 ) -> Result<Vec<ExternalReexport>, SymbolError> {
     let mut parts = import.segments.clone();
     parts.push(import.item.clone());
@@ -290,6 +291,7 @@ pub(crate) fn external_reexports(
         krate.root,
         &parts,
         import.namespace,
+        root_relative_bare_uses,
         &mut HashSet::new(),
     )
 }
@@ -299,7 +301,7 @@ pub(crate) fn external_reexport(
     krate: &Crate,
     import: &ImportPath,
 ) -> Result<Option<ExternalReexport>, SymbolError> {
-    let candidates = external_reexports(krate, import)?;
+    let candidates = external_reexports(krate, import, false)?;
     match candidates.as_slice() {
         [] => Ok(None),
         [candidate] => Ok(Some(candidate.clone())),
@@ -315,6 +317,7 @@ fn external_candidates(
     container_id: Id,
     parts: &[String],
     namespace: Option<NamespaceConstraint>,
+    root_relative_bare_uses: bool,
     visited: &mut HashSet<(Id, usize)>,
 ) -> Result<Vec<ExternalReexport>, SymbolError> {
     let Some((part, tail)) = parts.split_first() else {
@@ -347,7 +350,12 @@ fn external_candidates(
     let shadows_intermediate = !tail.is_empty() && !direct.is_empty();
     let mut candidates = Vec::new();
     for child_id in direct {
-        match follow_use_or_external(krate, child_id, &mut HashSet::new())? {
+        match follow_use_or_external(
+            krate,
+            child_id,
+            root_relative_bare_uses,
+            &mut HashSet::new(),
+        )? {
             Followed::External(mut external) => {
                 external.extend_path(tail);
                 external.namespace = namespace;
@@ -356,9 +364,14 @@ fn external_candidates(
             Followed::Local(id) if !tail.is_empty() => {
                 if item(krate, id).is_ok_and(is_path_container) {
                     let mut branch_visited = visited.clone();
-                    for external in
-                        external_candidates(krate, id, tail, namespace, &mut branch_visited)?
-                    {
+                    for external in external_candidates(
+                        krate,
+                        id,
+                        tail,
+                        namespace,
+                        root_relative_bare_uses,
+                        &mut branch_visited,
+                    )? {
                         push_external_candidate(&mut candidates, external);
                     }
                 }
@@ -382,7 +395,12 @@ fn external_candidates(
         let Some(_) = use_item.id else {
             continue;
         };
-        match follow_use_or_external(krate, *child_id, &mut HashSet::new())? {
+        match follow_use_or_external(
+            krate,
+            *child_id,
+            root_relative_bare_uses,
+            &mut HashSet::new(),
+        )? {
             Followed::External(mut external) => {
                 external.extend_path(parts);
                 external.via_glob = true;
@@ -392,9 +410,14 @@ fn external_candidates(
             Followed::Local(id) => {
                 if item(krate, id).is_ok_and(is_path_container) {
                     let mut branch_visited = visited.clone();
-                    for mut external in
-                        external_candidates(krate, id, parts, namespace, &mut branch_visited)?
-                    {
+                    for mut external in external_candidates(
+                        krate,
+                        id,
+                        parts,
+                        namespace,
+                        root_relative_bare_uses,
+                        &mut branch_visited,
+                    )? {
                         external.via_glob = true;
                         push_external_candidate(&mut candidates, external);
                     }
@@ -419,6 +442,7 @@ enum Followed {
 fn follow_use_or_external(
     krate: &Crate,
     mut id: Id,
+    root_relative_bare_uses: bool,
     visited: &mut HashSet<Id>,
 ) -> Result<Followed, SymbolError> {
     loop {
@@ -452,7 +476,7 @@ fn follow_use_or_external(
             .and_then(|target| external_from_id(krate, target))
             .is_some()
         {
-            match local_use_source_target(krate, id, use_item, visited) {
+            match local_use_source_target(krate, id, use_item, root_relative_bare_uses, visited) {
                 Ok(Some(Followed::Local(local_target))) => {
                     id = local_target;
                     continue;
@@ -526,6 +550,7 @@ fn local_use_source_target(
     krate: &Crate,
     use_id: Id,
     use_item: &rustdoc_types::Use,
+    root_relative_bare_uses: bool,
     visited: &mut HashSet<Id>,
 ) -> Result<Option<Followed>, SymbolError> {
     let mut parts = use_item.source.split("::").collect::<Vec<_>>();
@@ -544,7 +569,13 @@ fn local_use_source_target(
                 use_item.source
             ))
         })?,
-        _ => krate.root,
+        _ if root_relative_bare_uses => krate.root,
+        _ => containing_module(krate, use_id).ok_or_else(|| {
+            SymbolError::InvalidRustdoc(format!(
+                "use '{}' is missing its containing module",
+                use_item.source
+            ))
+        })?,
     };
     let mut offset = usize::from(matches!(first, "crate" | "self" | "super"));
     if first == "super" {
@@ -618,7 +649,8 @@ fn local_use_source_target(
             return Ok(Some(Followed::Local(matched)));
         }
         let mut branch_visited = visited.clone();
-        match follow_use_or_external(krate, matched, &mut branch_visited)? {
+        match follow_use_or_external(krate, matched, root_relative_bare_uses, &mut branch_visited)?
+        {
             Followed::Local(id) if item(krate, id).is_ok_and(is_path_container) => container = id,
             Followed::External(mut external) => {
                 external.extend_path(
@@ -3374,6 +3406,7 @@ mod tests {
                     item: "Ident".into(),
                     namespace: None,
                 },
+                false,
             )
             .unwrap(),
             vec![ExternalReexport {
@@ -3445,6 +3478,7 @@ mod tests {
                     item: "Thing".into(),
                     namespace: None,
                 },
+                false,
             )
             .unwrap(),
             vec![ExternalReexport {
@@ -3515,6 +3549,7 @@ mod tests {
                     item: "Ident".into(),
                     namespace: None,
                 },
+                false,
             )
             .unwrap(),
             vec![ExternalReexport {
@@ -3672,6 +3707,7 @@ mod tests {
                     item: "Thing".into(),
                     namespace: None,
                 },
+                false,
             )
             .unwrap(),
             vec![ExternalReexport {

@@ -275,6 +275,101 @@ fn local_module_shadows_same_named_external_crate_in_reexport_source() {
 }
 
 #[test]
+fn nested_reexport_uses_the_edition_specific_alias() {
+    let workspace = workspace(&["app", "dep", "origin", "alternate"]);
+    write_member(&workspace, "app", "dep = { path = \"../dep\" }", "");
+    write_member(
+        &workspace,
+        "dep",
+        "origin = { path = \"../origin\" }\nalternate = { path = \"../alternate\" }",
+        "pub use origin::api as route;\npub mod nested { pub use alternate::api as route; pub use route::Thing; }\n",
+    );
+    write_member(
+        &workspace,
+        "origin",
+        "",
+        "pub mod api { pub struct Thing { pub wrong: u8 } }\n",
+    );
+    write_member(
+        &workspace,
+        "alternate",
+        "",
+        "pub mod api { pub struct Thing { pub correct: u16 } }\n",
+    );
+    lock(&workspace);
+
+    let output = query(&workspace, "use dep::nested::Thing;");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("crate: alternate 0.1.0\n"), "{stdout}");
+    assert!(
+        stdout.contains("definition: pub struct Thing { pub correct: u16 }\n"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("wrong: u8"), "{stdout}");
+
+    fs::write(
+        workspace.path().join("app/src/lib.rs"),
+        "use dep::nested::Thing; pub fn make() -> Thing { Thing { correct: 1 } }\n",
+    )
+    .unwrap();
+    let compiler = Command::new("cargo")
+        .args(["check", "--locked", "--offline", "--package", "app"])
+        .current_dir(workspace.path())
+        .output()
+        .unwrap();
+    assert!(
+        compiler.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiler.stderr)
+    );
+
+    fs::write(
+        workspace.path().join("dep/Cargo.toml"),
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2015\"\n[dependencies]\norigin = { path = \"../origin\" }\nalternate = { path = \"../alternate\" }\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.path().join("dep/src/lib.rs"),
+        "extern crate origin; extern crate alternate;\npub use origin::api as route;\npub mod nested { pub use alternate::api as route; pub use route::Thing; }\n",
+    )
+    .unwrap();
+    fs::write(workspace.path().join("app/src/lib.rs"), "").unwrap();
+
+    let output = query(&workspace, "use dep::nested::Thing;");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("crate: origin 0.1.0\n"), "{stdout}");
+    assert!(
+        stdout.contains("definition: pub struct Thing { pub wrong: u8 }\n"),
+        "{stdout}"
+    );
+    fs::write(
+        workspace.path().join("app/src/lib.rs"),
+        "use dep::nested::Thing; pub fn make() -> Thing { Thing { wrong: 1 } }\n",
+    )
+    .unwrap();
+    let compiler = Command::new("cargo")
+        .args(["check", "--locked", "--offline", "--package", "app"])
+        .current_dir(workspace.path())
+        .output()
+        .unwrap();
+    assert!(
+        compiler.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiler.stderr)
+    );
+}
+
+#[test]
 fn revisiting_a_module_after_consuming_an_alias_segment_is_not_a_cycle() {
     let workspace = workspace(&["app", "facade", "origin"]);
     write_member(&workspace, "app", "facade = { path = \"../facade\" }", "");

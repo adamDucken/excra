@@ -490,7 +490,12 @@ fn resolve_query(
             package.version
         )));
     }
-    let external_candidates = symbols::external_reexports(&krate, import).map_err(|error| {
+    let external_candidates = symbols::external_reexports(
+        &krate,
+        import,
+        target.edition == cargo_metadata::Edition::E2015,
+    )
+    .map_err(|error| {
         QueryError::Incomplete(match &local_result {
             Ok(_) => format!("failed to inspect external re-export graph: {error}"),
             Err(local_error) => {
