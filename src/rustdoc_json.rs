@@ -679,9 +679,48 @@ pub(crate) fn reject_non_doc_only_source(
     struct Affected<'a> {
         normal: &'a RustcCfg,
         documentation: &'a RustcCfg,
-        parts: Vec<&'a str>,
-        owner: Option<String>,
+        wanted: &'a [Vec<String>],
+        module_path: Vec<String>,
+        owner: Option<Vec<String>>,
+        owner_is_container: bool,
         line: Option<usize>,
+    }
+    fn item_path(module: &[String], name: &str) -> Vec<String> {
+        let mut path = module.to_vec();
+        path.push(crate::imports::identifier_key(name).to_string());
+        path
+    }
+    fn impl_type_path(module: &[String], ty: &syn::Type) -> Option<Vec<String>> {
+        let syn::Type::Path(ty) = ty else {
+            return None;
+        };
+        let mut segments =
+            ty.path.segments.iter().map(|segment| {
+                crate::imports::identifier_key(&segment.ident.to_string()).to_string()
+            });
+        let first = segments.next()?;
+        let mut path = match first.as_str() {
+            "crate" => Vec::new(),
+            "self" => module.to_vec(),
+            "super" => {
+                let mut path = module.to_vec();
+                path.pop();
+                path
+            }
+            _ => {
+                let mut path = module.to_vec();
+                path.push(first);
+                path
+            }
+        };
+        for segment in segments {
+            if segment == "super" {
+                path.pop();
+            } else {
+                path.push(segment);
+            }
+        }
+        Some(path)
     }
     fn use_tree_may_bind(tree: &syn::UseTree, name: &str) -> bool {
         match tree {
@@ -703,51 +742,85 @@ pub(crate) fn reject_non_doc_only_source(
     impl<'ast> syn::visit::Visit<'ast> for Affected<'_> {
         fn visit_item(&mut self, item: &'ast syn::Item) {
             let previous = self.owner.clone();
+            let previous_is_container = self.owner_is_container;
+            let module_len = self.module_path.len();
+            self.owner_is_container = matches!(
+                item,
+                syn::Item::Mod(_)
+                    | syn::Item::Enum(_)
+                    | syn::Item::Trait(_)
+                    | syn::Item::Struct(_)
+                    | syn::Item::Union(_)
+                    | syn::Item::Impl(_)
+            );
             self.owner = match item {
-                syn::Item::Struct(item) => Some(item.ident.to_string()),
-                syn::Item::Enum(item) => Some(item.ident.to_string()),
-                syn::Item::Union(item) => Some(item.ident.to_string()),
-                syn::Item::Trait(item) => Some(item.ident.to_string()),
-                syn::Item::Type(item) => Some(item.ident.to_string()),
-                syn::Item::Fn(item) => Some(item.sig.ident.to_string()),
-                syn::Item::Const(item) => Some(item.ident.to_string()),
-                syn::Item::Static(item) => Some(item.ident.to_string()),
-                syn::Item::Mod(item) => Some(item.ident.to_string()),
-                syn::Item::Use(item) => Some(
-                    if use_tree_may_bind(&item.tree, self.parts.last().unwrap()) {
-                        *self.parts.last().unwrap()
-                    } else {
-                        "<other use>"
-                    }
-                    .to_string(),
-                ),
-                syn::Item::ExternCrate(item) => Some(
-                    item.rename
+                syn::Item::Struct(item) => {
+                    Some(item_path(&self.module_path, &item.ident.to_string()))
+                }
+                syn::Item::Enum(item) => {
+                    Some(item_path(&self.module_path, &item.ident.to_string()))
+                }
+                syn::Item::Union(item) => {
+                    Some(item_path(&self.module_path, &item.ident.to_string()))
+                }
+                syn::Item::Trait(item) => {
+                    Some(item_path(&self.module_path, &item.ident.to_string()))
+                }
+                syn::Item::Type(item) => {
+                    Some(item_path(&self.module_path, &item.ident.to_string()))
+                }
+                syn::Item::Fn(item) => {
+                    Some(item_path(&self.module_path, &item.sig.ident.to_string()))
+                }
+                syn::Item::Const(item) => {
+                    Some(item_path(&self.module_path, &item.ident.to_string()))
+                }
+                syn::Item::Static(item) => {
+                    Some(item_path(&self.module_path, &item.ident.to_string()))
+                }
+                syn::Item::Mod(item) => Some(item_path(&self.module_path, &item.ident.to_string())),
+                syn::Item::Use(item) => self
+                    .wanted
+                    .iter()
+                    .find(|wanted| {
+                        wanted.starts_with(&self.module_path)
+                            && wanted.len() == self.module_path.len() + 1
+                            && use_tree_may_bind(&item.tree, wanted.last().unwrap())
+                    })
+                    .cloned(),
+                syn::Item::ExternCrate(item) => Some(item_path(
+                    &self.module_path,
+                    &item
+                        .rename
                         .as_ref()
                         .map(|(_, ident)| ident)
                         .unwrap_or(&item.ident)
                         .to_string(),
-                ),
-                syn::Item::Macro(item) => Some(item.ident.as_ref().map_or_else(
-                    || {
-                        if macro_contains_name(&item.mac.tokens, &self.parts) {
-                            self.parts.last().unwrap().to_string()
-                        } else {
-                            "<other macro>".to_string()
-                        }
-                    },
-                    ToString::to_string,
                 )),
-                syn::Item::Impl(item) => match item.self_ty.as_ref() {
-                    syn::Type::Path(ty) => {
-                        ty.path.segments.last().map(|part| part.ident.to_string())
-                    }
-                    _ => previous.clone(),
-                },
+                syn::Item::Macro(item) => item
+                    .ident
+                    .as_ref()
+                    .map(|ident| item_path(&self.module_path, &ident.to_string()))
+                    .or_else(|| {
+                        self.wanted
+                            .iter()
+                            .find(|wanted| {
+                                wanted.starts_with(&self.module_path)
+                                    && macro_contains_name(
+                                        &item.mac.tokens,
+                                        &wanted[wanted.len() - 1..],
+                                    )
+                            })
+                            .cloned()
+                    }),
+                syn::Item::Impl(item) => impl_type_path(&self.module_path, &item.self_ty),
                 _ => previous.clone(),
             };
             if let syn::Item::Macro(item_macro) = item
-                && macro_contains_name(&item_macro.mac.tokens, &self.parts)
+                && self.wanted.iter().any(|wanted| {
+                    wanted.starts_with(&self.module_path)
+                        && macro_contains_name(&item_macro.mac.tokens, &wanted[wanted.len() - 1..])
+                })
                 && let Some(line) = non_doc_only_attribute(
                     item_macro.mac.tokens.clone(),
                     self.normal,
@@ -756,14 +829,20 @@ pub(crate) fn reject_non_doc_only_source(
             {
                 self.line = Some(line);
             }
+            if let syn::Item::Mod(item) = item {
+                self.module_path
+                    .push(crate::imports::identifier_key(&item.ident.to_string()).to_string());
+            }
             syn::visit::visit_item(self, item);
+            self.module_path.truncate(module_len);
             self.owner = previous;
+            self.owner_is_container = previous_is_container;
         }
 
         fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
             let matches_query = self.owner.as_deref().is_none_or(|owner| {
-                self.parts.iter().any(|part| {
-                    crate::imports::identifier_key(owner) == crate::imports::identifier_key(part)
+                self.wanted.iter().any(|wanted| {
+                    owner == wanted || (self.owner_is_container && wanted.starts_with(owner))
                 })
             });
             if matches_query
@@ -775,23 +854,93 @@ pub(crate) fn reject_non_doc_only_source(
         }
     }
 
-    fn macro_contains_name(tokens: &proc_macro2::TokenStream, parts: &[&str]) -> bool {
+    fn macro_contains_name(tokens: &proc_macro2::TokenStream, parts: &[String]) -> bool {
         tokens.clone().into_iter().any(|token| match token {
-            proc_macro2::TokenTree::Ident(ident) => parts.iter().any(|part| {
-                crate::imports::identifier_key(&ident.to_string())
-                    == crate::imports::identifier_key(part)
-            }),
+            proc_macro2::TokenTree::Ident(ident) => parts
+                .iter()
+                .any(|part| crate::imports::identifier_key(&ident.to_string()) == part),
             proc_macro2::TokenTree::Group(group) => macro_contains_name(&group.stream(), parts),
             _ => false,
         })
     }
 
+    fn source_module_path(krate: &Crate, root: &Path, source: &Path) -> Vec<String> {
+        if source == root {
+            return Vec::new();
+        }
+        let guessed = root
+            .parent()
+            .and_then(|parent| source.strip_prefix(parent).ok())
+            .map(|relative| {
+                let mut path = relative
+                    .parent()
+                    .into_iter()
+                    .flat_map(Path::components)
+                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                if let Some(stem) = relative.file_stem().and_then(|stem| stem.to_str())
+                    && stem != "mod"
+                {
+                    path.push(stem.to_string());
+                }
+                path
+            });
+        let canonical = krate
+            .index
+            .values()
+            .filter(|item| item.crate_id == 0)
+            .filter(|item| {
+                item.span
+                    .as_ref()
+                    .is_some_and(|span| span.filename == source)
+            })
+            .filter_map(|item| {
+                let summary = krate.paths.get(&item.id)?;
+                if summary.crate_id != 0 || summary.path.last()? != item.name.as_ref()? {
+                    return None;
+                }
+                let end = if matches!(&item.inner, rustdoc_types::ItemEnum::Module(_)) {
+                    summary.path.len()
+                } else {
+                    summary.path.len() - 1
+                };
+                Some(
+                    summary.path[1..end]
+                        .iter()
+                        .map(|part| crate::imports::identifier_key(part).to_string())
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .min_by_key(Vec::len);
+        match (guessed, canonical) {
+            (Some(guessed), Some(canonical)) if canonical.starts_with(&guessed) => guessed,
+            (_, Some(canonical)) => canonical,
+            (Some(guessed), None) => guessed,
+            (None, None) => Vec::new(),
+        }
+    }
+
     let mut parts = import
         .segments
         .iter()
-        .map(String::as_str)
+        .map(|part| crate::imports::identifier_key(part).to_string())
         .collect::<Vec<_>>();
-    parts.push(&import.item);
+    parts.push(crate::imports::identifier_key(&import.item).to_string());
+    let mut wanted = vec![parts];
+    if let Ok(report) = crate::symbols::find_symbol_report(krate, import)
+        && let Some(summary) = krate.paths.get(&report.resolved_id)
+        && summary.crate_id == 0
+    {
+        let canonical = summary
+            .path
+            .iter()
+            .skip(1)
+            .map(|part| crate::imports::identifier_key(part).to_string())
+            .collect::<Vec<_>>();
+        if !wanted.contains(&canonical) {
+            wanted.push(canonical);
+        }
+    }
     for path in sources {
         let source = fs::read_to_string(&path).map_err(|error| {
             format!(
@@ -811,8 +960,10 @@ pub(crate) fn reject_non_doc_only_source(
         let mut affected = Affected {
             normal: &cfg,
             documentation: &doc_cfg,
-            parts: parts.clone(),
+            wanted: &wanted,
+            module_path: source_module_path(krate, target.src_path.as_std_path(), &path),
             owner: None,
+            owner_is_container: false,
             line: None,
         };
         syn::visit::Visit::visit_file(&mut affected, &file);

@@ -139,3 +139,100 @@ fn feature_metadata_preserves_workspace_config_directory() {
         assert!(query(&workspace, options).contains("pub struct S;"));
     }
 }
+
+#[test]
+fn cfg_checks_distinguish_same_named_items_in_sibling_modules() {
+    let workspace = workspace(
+        r#"
+pub mod good { pub struct Same; }
+pub mod other {
+    pub struct Same;
+    impl Same { #[cfg(not(doc))] pub fn only(&self) {} }
+}
+pub mod separate { #[cfg(not(doc))] pub struct Same; }
+pub use good::Same as GoodSame;
+pub use other::Same as OtherSame;
+pub enum Choice { Base, #[cfg(not(doc))] Extra }
+pub mod file_good;
+pub mod file_other;
+#[path = "custom.rs"] pub mod remapped;
+pub use file_good::Same as FileGoodSame;
+"#,
+    );
+    fs::write(
+        workspace.path().join("dep/src/file_good.rs"),
+        "pub struct Same;\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.path().join("dep/src/file_other.rs"),
+        "pub struct Same;\nimpl Same { #[cfg(not(doc))] pub fn only(&self) {} }\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.path().join("dep/src/custom.rs"),
+        "pub struct Same;\nimpl Same { #[cfg(not(doc))] pub fn only(&self) {} }\n",
+    )
+    .unwrap();
+
+    for path in ["good::Same", "GoodSame", "file_good::Same", "FileGoodSame"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
+            .args([
+                format!("use dep::{path};"),
+                "--root".into(),
+                workspace.path().display().to_string(),
+                "--package".into(),
+                "app".into(),
+            ])
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{path}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("definition: pub struct Same;"),
+            "{path}: {stdout}"
+        );
+        assert!(!stdout.contains("only"), "{path}: {stdout}");
+    }
+
+    for path in [
+        "other::Same",
+        "OtherSame",
+        "file_other::Same",
+        "remapped::Same",
+        "separate::Same",
+        "Choice::Extra",
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_excra"))
+            .args([
+                format!("use dep::{path};"),
+                "--root".into(),
+                workspace.path().display().to_string(),
+                "--package".into(),
+                "app".into(),
+            ])
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+            .output()
+            .unwrap();
+        assert!(
+            !output.status.success(),
+            "{path}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("non-doc API extraction is incomplete"),
+            "{path}: {stderr}"
+        );
+        if matches!(path, "OtherSame" | "Choice::Extra" | "remapped::Same") {
+            assert!(stderr.contains("enables source"), "{path}: {stderr}");
+        }
+    }
+}
