@@ -1313,7 +1313,7 @@ fn format_item(krate: &Crate, item: &Item) -> SymbolDoc {
         ItemEnum::Variant(variant) => (
             "variant",
             variant_def(krate, &rendered_name, variant),
-            Vec::new(),
+            variant_field_docs(krate, variant),
         ),
         ItemEnum::Macro(source) => (
             "macro",

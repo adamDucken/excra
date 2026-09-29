@@ -55,7 +55,14 @@ pub enum Choice {
         #[deprecated(note = "use replacement")]
         value: u8,
     },
+    Tuple(
+        /// Tuple field documentation.
+        #[deprecated(note = "use a new tuple field")]
+        u16,
+    ),
 }
+
+pub use Choice::Record as ReexportedRecord;
 
 pub trait Contract {
     /// Check the contract.
@@ -85,7 +92,7 @@ pub trait Contract {
 
     let output = Command::new(env!("CARGO_BIN_EXE_excra"))
         .args([
-            "use dep::{Limits, Choice, Contract};",
+            "use dep::{Limits, Choice, Choice::Record, Choice::Tuple, ReexportedRecord, Contract};",
             "--root",
             workspace.path().to_str().unwrap(),
             "--package",
@@ -115,6 +122,21 @@ pub trait Contract {
     assert!(stdout.contains(
         "details:\n  Record { value: u8 }\n    attributes:\n      #[non_exhaustive]\n    docs:\n      Cannot be exhaustively constructed.\n    members:\n      value: u8\n        deprecation:\n          note: use replacement\n        docs:\n          Stored byte.\n"
     ), "{stdout}");
+    assert!(stdout.contains("item: variant Record\n"), "{stdout}");
+    assert!(stdout.contains(
+        "definition: Record { value: u8 }\nattributes:\n  #[non_exhaustive]\ndetails:\n  value: u8\n    deprecation:\n      note: use replacement\n    docs:\n      Stored byte.\n"
+    ), "{stdout}");
+    assert!(stdout.contains(
+        "definition: Tuple(u16)\ndetails:\n  #0: u16\n    deprecation:\n      note: use a new tuple field\n    docs:\n      Tuple field documentation.\n"
+    ), "{stdout}");
+    let reexport = stdout
+        .split("import: use dep::ReexportedRecord;\n")
+        .nth(1)
+        .expect(&stdout);
+    assert!(
+        reexport.contains("details:\n  value: u8\n    deprecation:\n      note: use replacement\n    docs:\n      Stored byte.\n"),
+        "{reexport}"
+    );
     assert!(stdout.contains(
         "details:\n  fn check(self: &Self) -> bool;\n    attributes:\n      #[must_use]\n    docs:\n      Check the contract.\n  const ID: u8 = 4;\n    deprecation:\n      note: use NEW_ID\n    docs:\n      Stable identifier.\n"
     ), "{stdout}");
