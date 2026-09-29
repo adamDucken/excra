@@ -2250,7 +2250,7 @@ fn binary_restores_derive_impls_missing_from_rustdoc() {
     let workspace = TempDir::new().unwrap();
     fs::write(
         workspace.path().join("Cargo.toml"),
-        "[workspace]\nmembers = [\"app\", \"dep\"]\nresolver = \"3\"\n",
+        "[workspace]\nmembers = [\"app\", \"dep\", \"origin\"]\nresolver = \"3\"\n",
     )
     .unwrap();
     write_member(
@@ -2262,8 +2262,14 @@ fn binary_restores_derive_impls_missing_from_rustdoc() {
     write_member(
         &workspace,
         "dep",
-        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
-        "#[cfg_attr(not(doc), derive(Clone))] pub struct Token;\n#[derive(Clone)] pub struct Plain;\n#[cfg_attr(not(doc), derive(Clone))] pub struct Generic<T>(pub T);\n",
+        "[package]\nname = \"dep\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\norigin = { path = \"../origin\" }\n",
+        "#[cfg_attr(not(doc), derive(Clone))] pub struct Token;\n#[derive(Clone)] pub struct Plain;\n#[cfg_attr(not(doc), derive(Clone))] pub struct Generic<T>(pub T);\npub use origin::*;\n",
+    );
+    write_member(
+        &workspace,
+        "origin",
+        "[package]\nname = \"origin\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        "pub mod unrelated {}\n",
     );
     lock_workspace(&workspace);
     let normal = Command::new("cargo")

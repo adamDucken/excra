@@ -475,7 +475,13 @@ fn resolve_query(
             ))),
         }
     };
-    let local_result = symbols::find_symbol_report(&krate, import);
+    let mut local_result = symbols::find_symbol_report(&krate, import);
+    if let Ok(symbols) = &mut local_result {
+        let doc = symbols.resolved.as_mut().unwrap_or(&mut symbols.imported);
+        doc.impls.extend(missing_impls);
+        doc.impls.sort();
+        doc.impls.dedup();
+    }
     if let Err(SymbolError::Ambiguous(message)) = &local_result {
         return Err(QueryError::Incomplete(format!(
             "ambiguous import '{}' in {} {}: {message}",
@@ -494,12 +500,8 @@ fn resolve_query(
     })?;
     if external_candidates.is_empty() {
         return match local_result {
-            Ok(mut symbols) => {
+            Ok(symbols) => {
                 validate_candidate()?;
-                let doc = symbols.resolved.as_mut().unwrap_or(&mut symbols.imported);
-                doc.impls.extend(missing_impls);
-                doc.impls.sort();
-                doc.impls.dedup();
                 Ok(ResolvedQuery {
                     symbols,
                     crate_name: package.name.clone(),
