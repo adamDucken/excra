@@ -122,6 +122,78 @@ mod docs_only {
 }
 
 #[test]
+fn normal_only_modules_report_missing_cross_module_methods() {
+    let workspace = workspace("");
+    fs::write(
+        workspace.path().join("dep/src/external.rs"),
+        "use crate::{S as Renamed};\nuse self::Renamed as Alias;\nimpl Alias { pub fn real(&self) -> u8 { 42 } }\n",
+    )
+    .unwrap();
+    for source in [
+        "#[cfg(not(doc))] mod implementation { impl crate::S { pub fn real(&self) -> u8 { 42 } } }",
+        "#[cfg(not(doc))] mod external;",
+        "#[cfg(not(doc))] mod implementation { use crate::S; mod nested { impl super::S { pub fn real(&self) -> u8 { 42 } } } }",
+        "#[cfg(not(doc))] mod implementation { use crate as root; impl root::S { pub fn real(&self) -> u8 { 42 } } }",
+        "#[cfg(not(doc))] mod implementation { type Alias = crate::S; impl Alias { pub fn real(&self) -> u8 { 42 } } }",
+        "#[cfg(not(doc))] mod implementation { use crate::*; impl S { pub fn real(&self) -> u8 { 42 } } }",
+        "#[cfg(not(doc))] mod implementation { use crate::S::{self}; impl S { pub fn real(&self) -> u8 { 42 } } }",
+        "pub mod other { pub struct S; } #[cfg(not(doc))] mod implementation { use crate::other::*; use crate::S; impl S { pub fn real(&self) -> u8 { 42 } } }",
+        "pub trait LocalTrait {} pub mod first { pub use crate::second::*; } pub mod second { pub use crate::first::*; pub use crate::{S, LocalTrait}; } #[cfg(not(doc))] mod implementation { use crate::first::*; impl LocalTrait for u8 {} impl S { pub fn real(&self) -> u8 { 42 } } }",
+        "pub mod donor { pub use crate::S; } #[cfg(not(doc))] mod implementation { use donor::S as Alias; impl Alias { pub fn real(&self) -> u8 { 42 } } }",
+    ] {
+        // Rust 2015 use paths begin at the root; the other cases use Rust 2024.
+        if source.contains("use donor::") {
+            let manifest = workspace.path().join("dep/Cargo.toml");
+            let contents = fs::read_to_string(&manifest).unwrap();
+            fs::write(manifest, contents.replace("2024", "2015")).unwrap();
+        }
+        fs::write(
+            workspace.path().join("dep/src/lib.rs"),
+            format!("pub struct S;\npub use S as PublicAlias;\npub struct Unrelated;\n{source}\n"),
+        )
+        .unwrap();
+        fs::write(
+            workspace.path().join("app/src/lib.rs"),
+            "pub fn check() -> u8 { dep::S.real() }\n",
+        )
+        .unwrap();
+        let consumer = Command::new("cargo")
+            .args(["check", "--offline", "--locked", "-p", "app"])
+            .current_dir(workspace.path())
+            .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+            .output()
+            .unwrap();
+        assert!(
+            consumer.status.success(),
+            "{source}: {}",
+            String::from_utf8_lossy(&consumer.stderr)
+        );
+        for name in ["S", "PublicAlias", "Unrelated"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_excra"))
+                .arg(format!("use dep::{name};"))
+                .arg("--root")
+                .arg(workspace.path())
+                .args(["--package", "app"])
+                .env("CARGO_NET_OFFLINE", "true")
+                .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            if name == "Unrelated" {
+                assert!(output.status.success(), "{source}: {stderr}");
+            } else {
+                assert!(!output.status.success(), "{source}: {name}");
+                assert!(
+                    stderr.contains("non-doc API extraction is incomplete")
+                        && stderr.contains("real"),
+                    "{source}: {name}: {stderr}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn feature_metadata_preserves_workspace_config_directory() {
     let workspace = workspace("pub struct S;\n");
     fs::create_dir_all(workspace.path().join("app/.cargo")).unwrap();

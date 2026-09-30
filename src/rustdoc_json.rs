@@ -974,13 +974,19 @@ pub(crate) fn reject_non_doc_only_source(
             ));
         }
     }
-    reject_non_doc_expansion(krate, json_path, import)
+    reject_non_doc_expansion(
+        krate,
+        json_path,
+        import,
+        target.edition == cargo_metadata::Edition::E2015,
+    )
 }
 
 fn reject_non_doc_expansion(
     krate: &Crate,
     json_path: &Path,
     import: &crate::imports::ImportPath,
+    legacy_use_paths: bool,
 ) -> Result<Vec<String>, String> {
     let normal_path = json_path.with_extension("normal.rs");
     let doc_path = json_path.with_extension("doc.rs");
@@ -1015,8 +1021,8 @@ fn reject_non_doc_expansion(
     }
     let mut missing_impls = Vec::new();
     for path in paths {
-        let normal = expanded_api_shape(&normal, &path)?;
-        let doc = expanded_api_shape(&doc, &path)?;
+        let normal = expanded_api_shape(&normal, &path, legacy_use_paths)?;
+        let doc = expanded_api_shape(&doc, &path, legacy_use_paths)?;
         for missing in normal.difference(&doc) {
             if let Some(impl_header) = missing.strip_prefix("derived ") {
                 missing_impls.push(impl_header.to_string());
@@ -1036,6 +1042,7 @@ fn reject_non_doc_expansion(
 fn expanded_api_shape(
     source: &str,
     import: &crate::imports::ImportPath,
+    legacy_use_paths: bool,
 ) -> Result<HashSet<String>, String> {
     use syn::{Fields, ImplItem, Item, Visibility};
     let file = syn::parse_file(source)
@@ -1110,12 +1117,170 @@ fn expanded_api_shape(
             syn::UseTree::Group(group) => group.items.iter().any(|tree| use_may_bind(tree, wanted)),
         }
     }
+    fn use_targets(
+        tree: &syn::UseTree,
+        prefix: &[String],
+        name: &str,
+        globs: bool,
+    ) -> Vec<Vec<String>> {
+        let key =
+            |ident: &syn::Ident| crate::imports::identifier_key(&ident.to_string()).to_string();
+        match tree {
+            syn::UseTree::Path(path) => {
+                let mut prefix = prefix.to_vec();
+                prefix.push(key(&path.ident));
+                use_targets(&path.tree, &prefix, name, globs)
+            }
+            syn::UseTree::Group(group) => group
+                .items
+                .iter()
+                .flat_map(|tree| use_targets(tree, prefix, name, globs))
+                .collect(),
+            syn::UseTree::Name(binding)
+                if !globs
+                    && (key(&binding.ident) == name
+                        || (binding.ident == "self"
+                            && prefix.last().is_some_and(|part| part == name))) =>
+            {
+                let mut path = prefix.to_vec();
+                if binding.ident != "self" {
+                    path.push(name.to_string());
+                }
+                vec![path]
+            }
+            syn::UseTree::Rename(binding) if !globs && key(&binding.rename) == name => {
+                let mut path = prefix.to_vec();
+                if binding.ident != "self" {
+                    path.push(key(&binding.ident));
+                }
+                vec![path]
+            }
+            syn::UseTree::Glob(_) if globs => {
+                let mut path = prefix.to_vec();
+                path.push(name.to_string());
+                vec![path]
+            }
+            _ => Vec::new(),
+        }
+    }
+    fn type_path(ty: &syn::Type, legacy_use_paths: bool) -> Option<Vec<String>> {
+        let syn::Type::Path(ty) = ty else {
+            return None;
+        };
+        if ty.qself.is_some() || (ty.path.leading_colon.is_some() && !legacy_use_paths) {
+            return None;
+        }
+        let mut path = Vec::new();
+        if ty.path.leading_colon.is_some() {
+            path.push("crate".to_string());
+        }
+        path.extend(
+            ty.path.segments.iter().map(|segment| {
+                crate::imports::identifier_key(&segment.ident.to_string()).to_string()
+            }),
+        );
+        Some(path)
+    }
+    fn resolve_path(
+        root: &[Item],
+        module: &[String],
+        path: &[String],
+        legacy_use_paths: bool,
+        visiting: &mut HashSet<Vec<String>>,
+    ) -> Option<Vec<String>> {
+        let mut absolute = module.to_vec();
+        let mut parts = path.iter().peekable();
+        match parts.peek().map(|part| part.as_str()) {
+            Some("crate") => {
+                absolute.clear();
+                parts.next();
+            }
+            Some("self") => {
+                parts.next();
+            }
+            _ => {}
+        }
+        while parts.peek().is_some_and(|part| part.as_str() == "super") {
+            absolute.pop()?;
+            parts.next();
+        }
+        absolute.extend(parts.cloned());
+        resolve_absolute(root, &absolute, legacy_use_paths, visiting)
+    }
+    fn resolve_absolute(
+        root: &[Item],
+        path: &[String],
+        legacy_use_paths: bool,
+        visiting: &mut HashSet<Vec<String>>,
+    ) -> Option<Vec<String>> {
+        let mut items = root;
+        for (index, name) in path.iter().enumerate() {
+            let module = &path[..index];
+            let named = items.iter().find(|item| {
+                let ident = match item {
+                    Item::Mod(item) => &item.ident,
+                    Item::Struct(item) => &item.ident,
+                    Item::Enum(item) => &item.ident,
+                    Item::Union(item) => &item.ident,
+                    Item::Type(item) => &item.ident,
+                    _ => return false,
+                };
+                crate::imports::identifier_key(&ident.to_string()) == name
+            });
+            match named {
+                Some(Item::Mod(item)) => {
+                    items = &item.content.as_ref()?.1;
+                    continue;
+                }
+                Some(Item::Type(item)) => {
+                    let target = type_path(&item.ty, legacy_use_paths)?;
+                    let mut resolved =
+                        resolve_path(root, module, &target, legacy_use_paths, visiting)?;
+                    resolved.extend_from_slice(&path[index + 1..]);
+                    return resolve_absolute(root, &resolved, legacy_use_paths, visiting);
+                }
+                Some(_) => return (index + 1 == path.len()).then(|| path.to_vec()),
+                None => {}
+            }
+            let binding = path[..=index].to_vec();
+            if !visiting.insert(binding.clone()) {
+                return None;
+            }
+            // Explicit imports shadow glob bindings regardless of source order.
+            for globs in [false, true] {
+                for item in items {
+                    let Item::Use(item) = item else { continue };
+                    for mut target in use_targets(&item.tree, &[], name, globs) {
+                        target.extend_from_slice(&path[index + 1..]);
+                        let use_module = if (legacy_use_paths || item.leading_colon.is_some())
+                            && !matches!(target.first().map(String::as_str), Some("self" | "super"))
+                        {
+                            &[][..]
+                        } else {
+                            module
+                        };
+                        if let Some(resolved) =
+                            resolve_path(root, use_module, &target, legacy_use_paths, visiting)
+                        {
+                            visiting.remove(&binding);
+                            return Some(resolved);
+                        }
+                    }
+                }
+            }
+            visiting.remove(&binding);
+            return None;
+        }
+        Some(path.to_vec())
+    }
     fn walk(
         source: &str,
+        root: &[Item],
         items: &[Item],
         modules: &mut Vec<String>,
         wanted: &[String],
         shapes: &mut HashSet<String>,
+        legacy_use_paths: bool,
     ) -> Result<(), String> {
         for item in items {
             if let Item::Mod(module) = item {
@@ -1124,7 +1289,15 @@ fn expanded_api_shape(
                     shapes.insert(format!("module {}", visibility(source, &module.vis)?));
                 }
                 if let Some((_, children)) = &module.content {
-                    walk(source, children, modules, wanted, shapes)?;
+                    walk(
+                        source,
+                        root,
+                        children,
+                        modules,
+                        wanted,
+                        shapes,
+                        legacy_use_paths,
+                    )?;
                 }
                 modules.pop();
                 continue;
@@ -1254,12 +1427,16 @@ fn expanded_api_shape(
                 ));
             }
             if let Item::Impl(imp) = item
-                && modules == &wanted[..wanted.len() - 1]
-                && let syn::Type::Path(self_ty) = imp.self_ty.as_ref()
-                && self_ty.path.segments.last().is_some_and(|segment| {
-                    crate::imports::identifier_key(&segment.ident.to_string())
-                        == wanted[wanted.len() - 1]
-                })
+                && let Some(self_ty) = type_path(&imp.self_ty, legacy_use_paths)
+                && let Some(owner_path) = resolve_path(
+                    root,
+                    modules,
+                    &self_ty,
+                    legacy_use_paths,
+                    &mut HashSet::new(),
+                )
+                && Some(owner_path)
+                    == resolve_path(root, &[], wanted, legacy_use_paths, &mut HashSet::new())
             {
                 let owner = text(source, imp.self_ty.span())?;
                 let trait_name = imp
@@ -1337,7 +1514,15 @@ fn expanded_api_shape(
         Ok(())
     }
 
-    walk(source, &file.items, &mut Vec::new(), &wanted, &mut shapes)?;
+    walk(
+        source,
+        &file.items,
+        &file.items,
+        &mut Vec::new(),
+        &wanted,
+        &mut shapes,
+        legacy_use_paths,
+    )?;
     Ok(shapes)
 }
 
