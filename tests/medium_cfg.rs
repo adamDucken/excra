@@ -139,9 +139,18 @@ fn normal_only_modules_report_missing_cross_module_methods() {
         "#[cfg(not(doc))] mod implementation { use crate::S::{self}; impl S { pub fn real(&self) -> u8 { 42 } } }",
         "pub mod other { pub struct S; } #[cfg(not(doc))] mod implementation { use crate::other::*; use crate::S; impl S { pub fn real(&self) -> u8 { 42 } } }",
         "pub trait LocalTrait {} pub mod first { pub use crate::second::*; } pub mod second { pub use crate::first::*; pub use crate::{S, LocalTrait}; } #[cfg(not(doc))] mod implementation { use crate::first::*; impl LocalTrait for u8 {} impl S { pub fn real(&self) -> u8 { 42 } } }",
+        "extern crate self as local; #[cfg(not(doc))] mod implementation { impl ::local::S { pub fn real(&self) -> u8 { 42 } } }",
+        "extern crate self as local; #[cfg(not(doc))] mod implementation { impl local::S { pub fn real(&self) -> u8 { 42 } } }",
+        "extern crate self as local; #[cfg(not(doc))] mod implementation { impl crate::local::S { pub fn real(&self) -> u8 { 42 } } }",
+        "extern crate self as local; #[cfg(not(doc))] mod implementation { use ::local::{S as Renamed}; type Alias = Renamed; impl Alias { pub fn real(&self) -> u8 { 42 } } }",
+        "extern crate self as local; #[cfg(not(doc))] mod implementation { use ::local as root; impl root::S { pub fn real(&self) -> u8 { 42 } } }",
+        "#[cfg(not(doc))] mod implementation { extern crate self as local; impl local::S { pub fn real(&self) -> u8 { 42 } } }",
+        "#[cfg(not(doc))] mod implementation { extern crate self as local; mod nested { impl super::local::S { pub fn real(&self) -> u8 { 42 } } } }",
+        "extern crate self as local; #[cfg(not(doc))] mod implementation { mod local { pub struct S; } impl ::local::S { pub fn real(&self) -> u8 { 42 } } }",
         "pub mod donor { pub use crate::S; } #[cfg(not(doc))] mod implementation { use donor::S as Alias; impl Alias { pub fn real(&self) -> u8 { 42 } } }",
+        "extern crate self as local; #[cfg(not(doc))] mod implementation { impl ::local::S { pub fn real(&self) -> u8 { 42 } } }",
     ] {
-        // Rust 2015 use paths begin at the root; the other cases use Rust 2024.
+        // The last two cases use Rust 2015, where absolute paths begin at the root.
         if source.contains("use donor::") {
             let manifest = workspace.path().join("dep/Cargo.toml");
             let contents = fs::read_to_string(&manifest).unwrap();
@@ -154,7 +163,7 @@ fn normal_only_modules_report_missing_cross_module_methods() {
         .unwrap();
         fs::write(
             workspace.path().join("app/src/lib.rs"),
-            "pub fn check() -> u8 { dep::S.real() }\n",
+            "pub fn check() -> u8 { dep::S.real() + dep::PublicAlias.real() }\n",
         )
         .unwrap();
         let consumer = Command::new("cargo")

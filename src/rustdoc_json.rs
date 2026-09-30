@@ -1167,12 +1167,13 @@ fn expanded_api_shape(
         let syn::Type::Path(ty) = ty else {
             return None;
         };
-        if ty.qself.is_some() || (ty.path.leading_colon.is_some() && !legacy_use_paths) {
+        if ty.qself.is_some() {
             return None;
         }
         let mut path = Vec::new();
         if ty.path.leading_colon.is_some() {
-            path.push("crate".to_string());
+            // Modern absolute paths start in the extern prelude, not the crate root.
+            path.push(if legacy_use_paths { "crate" } else { "::" }.to_string());
         }
         path.extend(
             ty.path.segments.iter().map(|segment| {
@@ -1180,6 +1181,15 @@ fn expanded_api_shape(
             }),
         );
         Some(path)
+    }
+    fn self_crate_alias(items: &[Item], name: &str) -> bool {
+        items.iter().any(|item| {
+            matches!(item, Item::ExternCrate(item)
+                if item.ident == "self"
+                    && crate::imports::identifier_key(
+                        &item.rename.as_ref().map_or(&item.ident, |(_, name)| name).to_string()
+                    ) == name)
+        })
     }
     fn resolve_path(
         root: &[Item],
@@ -1190,7 +1200,15 @@ fn expanded_api_shape(
     ) -> Option<Vec<String>> {
         let mut absolute = module.to_vec();
         let mut parts = path.iter().peekable();
+        let mut prelude_index = None;
         match parts.peek().map(|part| part.as_str()) {
+            Some("::") => {
+                parts.next();
+                if !self_crate_alias(root, parts.next()?) {
+                    return None;
+                }
+                absolute.clear();
+            }
             Some("crate") => {
                 absolute.clear();
                 parts.next();
@@ -1198,20 +1216,26 @@ fn expanded_api_shape(
             Some("self") => {
                 parts.next();
             }
-            _ => {}
+            Some("super") => {}
+            _ => {
+                if !legacy_use_paths {
+                    prelude_index = Some(module.len());
+                }
+            }
         }
         while parts.peek().is_some_and(|part| part.as_str() == "super") {
             absolute.pop()?;
             parts.next();
         }
         absolute.extend(parts.cloned());
-        resolve_absolute(root, &absolute, legacy_use_paths, visiting)
+        resolve_absolute(root, &absolute, legacy_use_paths, visiting, prelude_index)
     }
     fn resolve_absolute(
         root: &[Item],
         path: &[String],
         legacy_use_paths: bool,
         visiting: &mut HashSet<Vec<String>>,
+        prelude_index: Option<usize>,
     ) -> Option<Vec<String>> {
         let mut items = root;
         for (index, name) in path.iter().enumerate() {
@@ -1223,6 +1247,9 @@ fn expanded_api_shape(
                     Item::Enum(item) => &item.ident,
                     Item::Union(item) => &item.ident,
                     Item::Type(item) => &item.ident,
+                    Item::ExternCrate(item) => {
+                        item.rename.as_ref().map_or(&item.ident, |(_, name)| name)
+                    }
                     _ => return false,
                 };
                 crate::imports::identifier_key(&ident.to_string()) == name
@@ -1237,7 +1264,19 @@ fn expanded_api_shape(
                     let mut resolved =
                         resolve_path(root, module, &target, legacy_use_paths, visiting)?;
                     resolved.extend_from_slice(&path[index + 1..]);
-                    return resolve_absolute(root, &resolved, legacy_use_paths, visiting);
+                    return resolve_absolute(root, &resolved, legacy_use_paths, visiting, None);
+                }
+                Some(Item::ExternCrate(item)) => {
+                    if item.ident != "self" {
+                        return None;
+                    }
+                    return resolve_absolute(
+                        root,
+                        &path[index + 1..],
+                        legacy_use_paths,
+                        visiting,
+                        None,
+                    );
                 }
                 Some(_) => return (index + 1 == path.len()).then(|| path.to_vec()),
                 None => {}
@@ -1247,12 +1286,17 @@ fn expanded_api_shape(
                 return None;
             }
             // Explicit imports shadow glob bindings regardless of source order.
+            let mut explicit_binding = false;
             for globs in [false, true] {
                 for item in items {
                     let Item::Use(item) = item else { continue };
                     for mut target in use_targets(&item.tree, &[], name, globs) {
+                        explicit_binding |= !globs;
                         target.extend_from_slice(&path[index + 1..]);
-                        let use_module = if (legacy_use_paths || item.leading_colon.is_some())
+                        if item.leading_colon.is_some() && !legacy_use_paths {
+                            target.insert(0, "::".to_string());
+                        }
+                        let use_module = if legacy_use_paths
                             && !matches!(target.first().map(String::as_str), Some("self" | "super"))
                         {
                             &[][..]
@@ -1268,8 +1312,16 @@ fn expanded_api_shape(
                     }
                 }
             }
+            let resolved = if prelude_index == Some(index)
+                && !explicit_binding
+                && self_crate_alias(root, name)
+            {
+                resolve_absolute(root, &path[index + 1..], legacy_use_paths, visiting, None)
+            } else {
+                None
+            };
             visiting.remove(&binding);
-            return None;
+            return resolved;
         }
         Some(path.to_vec())
     }
@@ -3612,6 +3664,41 @@ mod tests {
         {
             ExitStatus::from_raw(code as u32)
         }
+    }
+
+    #[test]
+    fn expansion_self_crate_aliases_preserve_lexical_and_external_identity() {
+        let import = crate::imports::parse_use_line("use dep::S;").unwrap();
+        let source = r#"
+extern crate self as local;
+extern crate external as foreign;
+pub struct S;
+pub mod origin { pub struct S; }
+mod implementation {
+    mod local { pub struct S; }
+    impl local::S { pub fn lexical(&self) {} }
+    impl ::local::S { pub fn real(&self) {} }
+}
+mod imports {
+    use crate::origin as local;
+    impl local::S { pub fn imported(&self) {} }
+}
+mod external_import {
+    use foreign::S as local;
+    impl local { pub fn explicit_external(&self) {} }
+}
+mod qualified_external {
+    impl crate::foreign::S { pub fn renamed_external(&self) {} }
+    impl ::origin::S { pub fn absolute_external(&self) {} }
+}
+"#;
+        let shapes = expanded_api_shape(source, &import, false).unwrap();
+        let methods = shapes
+            .iter()
+            .filter(|shape| shape.starts_with("impl"))
+            .collect::<Vec<_>>();
+        assert_eq!(methods.len(), 1, "{methods:?}");
+        assert!(methods[0].contains("fn real(&self)"), "{methods:?}");
     }
 
     #[test]
