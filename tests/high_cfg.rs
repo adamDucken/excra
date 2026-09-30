@@ -181,17 +181,17 @@ fn procedural_macro_api_changes_report_incomplete_extraction() {
         (
             "app",
             "[dependencies]\ndep = { path = \"../dep\" }\n",
-            "pub fn check() { let packet = dep::Packet { byte: 1 }; let _ = packet.byte; dep::S.ghost(); dep::Included.generated(); let _ = dep::Choice::Extra(1); let _: dep::api::Missing; }\n",
+            "pub fn check() { let packet = dep::Packet { byte: 1 }; let _ = packet.byte; dep::S.ghost(); dep::Included.generated(); let _ = dep::Choice::Extra(1); let _: dep::api::Missing; }\npub struct Consumer;\nimpl dep::Contract for Consumer { fn required(&self) {} }\n",
         ),
         (
             "dep",
             "[dependencies]\nshape = { path = \"../shape\" }\n",
-            "use shape::{packet, method, missing, variants};\n#[packet] pub struct Packet;\n#[method] pub struct S;\n#[variants] pub enum Choice {}\nmissing!();\npub mod nested { #[shape::packet] pub struct Packet; }\npub mod donor { #[shape::packet] pub struct Packet; shape::missing!(); }\npub mod api { pub use crate::donor::*; }\npub struct Included;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/included.rs\"));\npub struct Plain;\n",
+            "use shape::{packet, method, missing, variants};\n#[packet] pub struct Packet;\n#[method] pub struct S;\n#[shape::contract] pub trait Contract {}\n#[variants] pub enum Choice {}\nmissing!();\npub mod nested { #[shape::packet] pub struct Packet; }\npub mod donor { #[shape::packet] pub struct Packet; shape::missing!(); }\npub mod api { pub use crate::donor::*; }\npub struct Included;\ninclude!(concat!(env!(\"OUT_DIR\"), \"/included.rs\"));\npub struct Plain;\n",
         ),
         (
             "shape",
             "[lib]\nproc-macro = true\n",
-            "extern crate proc_macro;\nuse proc_macro::TokenStream;\n#[proc_macro_attribute]\npub fn packet(_: TokenStream, _: TokenStream) -> TokenStream {\n    \"pub struct Packet { #[cfg(not(doc))] pub byte: u8 }\".parse().unwrap()\n}\n#[proc_macro_attribute]\npub fn method(_: TokenStream, _: TokenStream) -> TokenStream {\n    \"pub struct S; impl S { #[cfg(not(doc))] pub fn ghost(&self) {} }\".parse().unwrap()\n}\n#[proc_macro_attribute]\npub fn variants(_: TokenStream, _: TokenStream) -> TokenStream {\n    \"pub enum Choice { Base, #[cfg(not(doc))] Extra(u8) }\".parse().unwrap()\n}\n#[proc_macro]\npub fn missing(_: TokenStream) -> TokenStream {\n    \"#[cfg(not(doc))] pub struct Missing;\".parse().unwrap()\n}\n",
+            "extern crate proc_macro;\nuse proc_macro::TokenStream;\n#[proc_macro_attribute]\npub fn packet(_: TokenStream, _: TokenStream) -> TokenStream {\n    \"pub struct Packet { #[cfg(not(doc))] pub byte: u8 }\".parse().unwrap()\n}\n#[proc_macro_attribute]\npub fn method(_: TokenStream, _: TokenStream) -> TokenStream {\n    \"pub struct S; impl S { #[cfg(not(doc))] pub fn ghost(&self) {} }\".parse().unwrap()\n}\n#[proc_macro_attribute]\npub fn contract(_: TokenStream, _: TokenStream) -> TokenStream {\n    \"pub trait Contract { #[cfg(not(doc))] fn required(&self); #[cfg(doc)] fn required(&self) {} }\".parse().unwrap()\n}\n#[proc_macro_attribute]\npub fn variants(_: TokenStream, _: TokenStream) -> TokenStream {\n    \"pub enum Choice { Base, #[cfg(not(doc))] Extra(u8) }\".parse().unwrap()\n}\n#[proc_macro]\npub fn missing(_: TokenStream) -> TokenStream {\n    \"#[cfg(not(doc))] pub struct Missing;\".parse().unwrap()\n}\n",
         ),
     ] {
         let path = workspace.path().join(name);
@@ -235,6 +235,7 @@ fn procedural_macro_api_changes_report_incomplete_extraction() {
     for (name, missing) in [
         ("Packet", "field byte"),
         ("S", "ghost"),
+        ("Contract", "required trait method fn required(&self)"),
         ("Included", "generated"),
         ("Choice", "variant Extra"),
         ("Missing", "struct"),
@@ -307,4 +308,20 @@ fn procedural_macro_api_changes_report_incomplete_extraction() {
         String::from_utf8_lossy(&unaffected.stderr)
     );
     assert!(String::from_utf8_lossy(&unaffected.stdout).contains("pub struct Plain;"));
+
+    fs::write(
+        workspace.path().join("app/src/lib.rs"),
+        "pub struct Consumer;\nimpl dep::Contract for Consumer {}\n",
+    )
+    .unwrap();
+    let incomplete_impl = Command::new("cargo")
+        .args(["check", "--offline", "--locked", "-p", "app"])
+        .current_dir(workspace.path())
+        .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+        .output()
+        .unwrap();
+    assert!(!incomplete_impl.status.success());
+    let stderr = String::from_utf8_lossy(&incomplete_impl.stderr);
+    assert!(stderr.contains("E0046"), "{stderr}");
+    assert!(stderr.contains("required"), "{stderr}");
 }

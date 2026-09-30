@@ -1210,8 +1210,13 @@ fn expanded_api_shape(
                         for member in &item.items {
                             match member {
                                 syn::TraitItem::Fn(method) => {
+                                    let requirement = if method.default.is_some() {
+                                        "provided"
+                                    } else {
+                                        "required"
+                                    };
                                     shapes.insert(format!(
-                                        "trait method {}",
+                                        "{requirement} trait method {}",
                                         text(source, method.sig.span())?
                                     ));
                                 }
