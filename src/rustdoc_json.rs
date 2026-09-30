@@ -840,7 +840,7 @@ pub(crate) fn reject_non_doc_only_source(
         }
 
         fn visit_attribute(&mut self, attribute: &'ast syn::Attribute) {
-            let matches_query = self.owner.as_deref().is_none_or(|owner| {
+            let matches_query = self.owner.as_deref().is_some_and(|owner| {
                 self.wanted.iter().any(|wanted| {
                     owner == wanted || (self.owner_is_container && wanted.starts_with(owner))
                 })
@@ -957,13 +957,15 @@ pub(crate) fn reject_non_doc_only_source(
                 path.display()
             )
         })?;
+        let module_path = source_module_path(krate, target.src_path.as_std_path(), &path);
         let mut affected = Affected {
             normal: &cfg,
             documentation: &doc_cfg,
             wanted: &wanted,
-            module_path: source_module_path(krate, target.src_path.as_std_path(), &path),
-            owner: None,
-            owner_is_container: false,
+            // File attributes belong to the crate or module; unmatched items have no owner.
+            owner: Some(module_path.clone()),
+            module_path,
+            owner_is_container: true,
             line: None,
         };
         syn::visit::Visit::visit_file(&mut affected, &file);
@@ -1311,11 +1313,12 @@ fn expanded_api_shape(
                         }
                     }
                 }
+                if explicit_binding {
+                    visiting.remove(&binding);
+                    return None;
+                }
             }
-            let resolved = if prelude_index == Some(index)
-                && !explicit_binding
-                && self_crate_alias(root, name)
-            {
+            let resolved = if prelude_index == Some(index) && self_crate_alias(root, name) {
                 resolve_absolute(root, &path[index + 1..], legacy_use_paths, visiting, None)
             } else {
                 None
@@ -3699,6 +3702,31 @@ mod qualified_external {
             .collect::<Vec<_>>();
         assert_eq!(methods.len(), 1, "{methods:?}");
         assert!(methods[0].contains("fn real(&self)"), "{methods:?}");
+    }
+
+    #[test]
+    fn unresolved_explicit_imports_never_select_glob_types() {
+        let import = crate::imports::parse_use_line("use dep::S;").unwrap();
+        for imports in [
+            "use crate::*; use origin::S;",
+            "use origin::S; use crate::*;",
+            "use crate::*; use origin::S::{self};",
+            "use origin::{S as r#S}; use crate::*;",
+        ] {
+            let source = format!(
+                "pub struct S; impl S {{ pub fn live(&self) {{}} }} pub trait LocalTrait {{ fn external(&self); }} mod implementation {{ {imports} impl LocalTrait for S {{ fn external(&self) {{}} }} }}"
+            );
+            let shapes = expanded_api_shape(&source, &import, false).unwrap();
+            let methods = shapes
+                .iter()
+                .filter(|shape| shape.starts_with("impl"))
+                .collect::<Vec<_>>();
+            assert_eq!(methods.len(), 1, "{imports}: {methods:?}");
+            assert!(
+                methods[0].contains("fn live(&self)"),
+                "{imports}: {methods:?}"
+            );
+        }
     }
 
     #[test]

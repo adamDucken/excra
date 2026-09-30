@@ -34,9 +34,9 @@ fn workspace(source: &str) -> TempDir {
     workspace
 }
 
-fn query(workspace: &TempDir, options: &[&str]) -> String {
+fn query(workspace: &TempDir, path: &str, options: &[&str]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_excra"))
-        .args(["use dep::S;", "--root"])
+        .args([format!("use dep::{path};"), "--root".into()])
         .arg(workspace.path())
         .args(["--package", "app"])
         .args(options)
@@ -84,7 +84,7 @@ mod docs_only {
         "impl crate::S { pub fn deep_ghost(&self) {} }\n",
     )
     .unwrap();
-    let report = query(&workspace, &[]);
+    let report = query(&workspace, "S", &[]);
     assert!(report.contains("pub struct S;"), "{report}");
     assert!(
         report.contains("impl S { pub fn live(self: &Self) }"),
@@ -217,7 +217,182 @@ fn feature_metadata_preserves_workspace_config_directory() {
         &["--all-features"][..],
         &["--features", "extra"][..],
     ] {
-        assert!(query(&workspace, options).contains("pub struct S;"));
+        assert!(query(&workspace, "S", options).contains("pub struct S;"));
+    }
+}
+
+#[test]
+fn unrelated_cfg_imports_preserve_queries_and_relevant_cfg_checks() {
+    let workspace = workspace(
+        r#"
+pub struct S;
+pub use S as PublicAlias;
+#[cfg(not(doc))] use std::fmt::Debug;
+#[cfg(not(doc))] use std::fmt::{self, Display as HiddenDisplay};
+pub mod keep {
+    pub struct S;
+    #[cfg(not(doc))] use std::fmt::Debug;
+}
+pub use keep::S as NestedAlias;
+pub mod sibling {
+    #[cfg(not(doc))] use std::{fmt::{Debug, Display as HiddenDisplay}};
+}
+pub mod file_sibling;
+pub fn helper() { #[cfg(not(doc))] use std::fmt::Debug; }
+"#,
+    );
+    fs::write(
+        workspace.path().join("dep/src/file_sibling.rs"),
+        "#[cfg(not(doc))] use std::fmt::Debug;\npub struct Marker;\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.path().join("app/src/lib.rs"),
+        "pub fn check() { let _ = dep::S; let _ = dep::PublicAlias; let _ = dep::keep::S; let _ = dep::NestedAlias; }\n",
+    )
+    .unwrap();
+    let consumer = Command::new("cargo")
+        .args(["check", "--offline", "--locked", "-p", "app"])
+        .current_dir(workspace.path())
+        .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+        .output()
+        .unwrap();
+    assert!(
+        consumer.status.success(),
+        "{}",
+        String::from_utf8_lossy(&consumer.stderr)
+    );
+    for path in ["S", "PublicAlias", "keep::S", "NestedAlias"] {
+        let report = query(&workspace, path, &[]);
+        assert!(
+            report.contains("definition: pub struct S;"),
+            "{path}: {report}"
+        );
+    }
+
+    fs::write(workspace.path().join("app/src/lib.rs"), "").unwrap();
+    for source in [
+        "#![cfg(not(doc))]\npub struct S;\npub use S as PublicAlias;\n",
+        "pub mod actual { pub struct S; }\n#[cfg(not(doc))] pub use actual::S;\n#[cfg(not(doc))] pub use actual::S as PublicAlias;\n",
+    ] {
+        fs::write(workspace.path().join("dep/src/lib.rs"), source).unwrap();
+        for path in ["S", "PublicAlias"] {
+            let output = Command::new(env!("CARGO_BIN_EXE_excra"))
+                .args([format!("use dep::{path};"), "--root".into()])
+                .arg(workspace.path())
+                .args(["--package", "app"])
+                .env("CARGO_NET_OFFLINE", "true")
+                .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{source}: {path}");
+            assert!(
+                stderr.contains("non-doc API extraction is incomplete")
+                    && stderr.contains("enables source"),
+                "{source}: {path}: {stderr}"
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_external_imports_shadow_globs_with_unrelated_cfg_imports() {
+    let workspace = workspace("");
+    fs::write(
+        workspace.path().join("Cargo.toml"),
+        "[workspace]\nmembers = [\"app\", \"dep\", \"origin\"]\nresolver = \"3\"\n",
+    )
+    .unwrap();
+    fs::create_dir_all(workspace.path().join("origin/src")).unwrap();
+    fs::write(
+        workspace.path().join("origin/Cargo.toml"),
+        "[package]\nname = \"origin\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    fs::write(
+        workspace.path().join("origin/src/lib.rs"),
+        "pub struct S { pub external: u8 }\n",
+    )
+    .unwrap();
+    let manifest = workspace.path().join("dep/Cargo.toml");
+    let contents = fs::read_to_string(&manifest).unwrap();
+    fs::write(
+        manifest,
+        format!("{contents}[dependencies]\norigin = {{ path = \"../origin\" }}\n"),
+    )
+    .unwrap();
+    let lock = Command::new("cargo")
+        .args(["generate-lockfile", "--offline"])
+        .current_dir(workspace.path())
+        .output()
+        .unwrap();
+    assert!(
+        lock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&lock.stderr)
+    );
+    fs::write(
+        workspace.path().join("app/src/lib.rs"),
+        "use dep::LocalTrait;\npub fn check() -> u8 { dep::S { local: 1 }.live() + dep::PublicAlias { local: 2 }.live() + dep::ExternalS { external: 3 }.external() }\n",
+    )
+    .unwrap();
+    for binding in [
+        "use origin::S;",
+        "use origin::{S};",
+        "use origin::S::{self};",
+        "use origin::S as r#S;",
+        "use crate::route::S;",
+    ] {
+        for imports in [
+            format!("use crate::*; {binding}"),
+            format!("{binding} use crate::*;"),
+        ] {
+            fs::write(
+                workspace.path().join("dep/src/lib.rs"),
+                format!(
+                    r#"
+pub struct S {{ pub local: u8 }}
+impl S {{ pub fn live(&self) -> u8 {{ self.local }} }}
+pub use S as PublicAlias;
+pub use origin::S as ExternalS;
+pub trait LocalTrait {{ fn external(&self) -> u8; }}
+mod route {{ pub use origin::S; }}
+#[cfg(not(doc))] use std::fmt::Debug;
+mod sibling {{ #[cfg(not(doc))] use std::fmt::Display; }}
+#[cfg(not(doc))] mod implementation {{
+    {imports}
+    impl LocalTrait for S {{ fn external(&self) -> u8 {{ self.external }} }}
+}}
+"#
+                ),
+            )
+            .unwrap();
+            let consumer = Command::new("cargo")
+                .args(["check", "--offline", "--locked", "-p", "app"])
+                .current_dir(workspace.path())
+                .env("CARGO_TARGET_DIR", workspace.path().join("target"))
+                .output()
+                .unwrap();
+            assert!(
+                consumer.status.success(),
+                "{imports}: {}",
+                String::from_utf8_lossy(&consumer.stderr)
+            );
+            for path in ["S", "PublicAlias"] {
+                let report = query(&workspace, path, &[]);
+                assert!(
+                    report.contains("definition: pub struct S { pub local: u8 }")
+                        && report.contains("pub fn live(self: &Self) -> u8"),
+                    "{imports}: {path}: {report}"
+                );
+                assert!(
+                    !report.contains("LocalTrait"),
+                    "{imports}: {path}: {report}"
+                );
+                assert!(!report.contains("external"), "{imports}: {path}: {report}");
+            }
+        }
     }
 }
 
