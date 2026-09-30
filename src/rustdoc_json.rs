@@ -1005,8 +1005,10 @@ fn reject_non_doc_expansion(
         )
     })?;
     let mut paths = vec![import.clone()];
-    if let Ok(report) = crate::symbols::find_symbol_report(krate, import)
-        && let Some(summary) = krate.paths.get(&report.resolved_id)
+    let resolved_id = crate::symbols::find_symbol_report(krate, import)
+        .ok()
+        .map(|report| report.resolved_id);
+    if let Some(summary) = resolved_id.and_then(|id| krate.paths.get(&id))
         && summary.crate_id == 0
         && summary.path.len() > 1
     {
@@ -1021,11 +1023,37 @@ fn reject_non_doc_expansion(
             paths.push(canonical);
         }
     }
+    let reported_trait_members = resolved_id
+        .and_then(|id| krate.index.get(&id))
+        .and_then(|item| match &item.inner {
+            rustdoc_types::ItemEnum::Trait(trait_) => Some(trait_),
+            _ => None,
+        })
+        .map(|trait_| {
+            trait_
+                .items
+                .iter()
+                .filter_map(|id| {
+                    let item = krate.index.get(id)?;
+                    let (kind, has_default) = match &item.inner {
+                        rustdoc_types::ItemEnum::Function(method) => ("method", method.has_body),
+                        rustdoc_types::ItemEnum::AssocConst { value, .. } => {
+                            ("const", value.is_some())
+                        }
+                        rustdoc_types::ItemEnum::AssocType { type_, .. } => {
+                            ("type", type_.is_some())
+                        }
+                        _ => return None,
+                    };
+                    Some(trait_member_key(kind, item.name.as_deref()?, has_default))
+                })
+                .collect::<HashSet<_>>()
+        });
     let mut missing_impls = Vec::new();
     for path in paths {
         let normal = expanded_api_shape(&normal, &path, legacy_use_paths)?;
         let doc = expanded_api_shape(&doc, &path, legacy_use_paths)?;
-        for missing in normal.difference(&doc) {
+        for missing in normal.shapes.difference(&doc.shapes) {
             if let Some(impl_header) = missing.strip_prefix("derived ") {
                 missing_impls.push(impl_header.to_string());
             } else {
@@ -1035,17 +1063,41 @@ fn reject_non_doc_expansion(
                 ));
             }
         }
+        if let Some(reported_members) = &reported_trait_members {
+            for (member, shape) in &normal.trait_members {
+                if !reported_members.contains(member) {
+                    return Err(format!(
+                        "non-doc API extraction is incomplete: compiler expansion for '{}' contains {shape}, which is absent from the filtered Rustdoc JSON trait members",
+                        path.full_path()
+                    ));
+                }
+            }
+        }
     }
     missing_impls.sort();
     missing_impls.dedup();
     Ok(missing_impls)
 }
 
+#[derive(Default)]
+struct ExpandedApi {
+    shapes: HashSet<String>,
+    trait_members: HashMap<String, String>,
+}
+
+fn trait_member_key(kind: &str, name: &str, has_default: bool) -> String {
+    let requirement = if has_default { "provided" } else { "required" };
+    format!(
+        "{requirement} trait {kind} {}",
+        crate::imports::identifier_key(name)
+    )
+}
+
 fn expanded_api_shape(
     source: &str,
     import: &crate::imports::ImportPath,
     legacy_use_paths: bool,
-) -> Result<HashSet<String>, String> {
+) -> Result<ExpandedApi, String> {
     use syn::{Fields, ImplItem, Item, Visibility};
     let file = syn::parse_file(source)
         .map_err(|error| format!("cannot parse selected compiler expansion: {error}"))?;
@@ -1055,7 +1107,7 @@ fn expanded_api_shape(
         .map(|part| crate::imports::identifier_key(part).to_string())
         .collect::<Vec<_>>();
     wanted.push(crate::imports::identifier_key(&import.item).to_string());
-    let mut shapes = HashSet::new();
+    let mut api = ExpandedApi::default();
 
     fn text(source: &str, span: proc_macro2::Span) -> Result<&str, String> {
         let starts = std::iter::once(0)
@@ -1334,14 +1386,15 @@ fn expanded_api_shape(
         items: &[Item],
         modules: &mut Vec<String>,
         wanted: &[String],
-        shapes: &mut HashSet<String>,
+        api: &mut ExpandedApi,
         legacy_use_paths: bool,
     ) -> Result<(), String> {
         for item in items {
             if let Item::Mod(module) = item {
                 modules.push(crate::imports::identifier_key(&module.ident.to_string()).to_string());
                 if modules == wanted {
-                    shapes.insert(format!("module {}", visibility(source, &module.vis)?));
+                    api.shapes
+                        .insert(format!("module {}", visibility(source, &module.vis)?));
                 }
                 if let Some((_, children)) = &module.content {
                     walk(
@@ -1350,13 +1403,14 @@ fn expanded_api_shape(
                         children,
                         modules,
                         wanted,
-                        shapes,
+                        api,
                         legacy_use_paths,
                     )?;
                 }
                 modules.pop();
                 continue;
             }
+            let shapes = &mut api.shapes;
             let name = match item {
                 Item::Struct(item) => Some(&item.ident),
                 Item::Enum(item) => Some(&item.ident),
@@ -1436,34 +1490,73 @@ fn expanded_api_shape(
                             text(source, item.supertraits.span())?
                         ));
                         for member in &item.items {
-                            match member {
+                            let (key, shape) = match member {
                                 syn::TraitItem::Fn(method) => {
                                     let requirement = if method.default.is_some() {
                                         "provided"
                                     } else {
                                         "required"
                                     };
-                                    shapes.insert(format!(
-                                        "{requirement} trait method {}",
-                                        text(source, method.sig.span())?
-                                    ));
+                                    (
+                                        trait_member_key(
+                                            "method",
+                                            &method.sig.ident.to_string(),
+                                            method.default.is_some(),
+                                        ),
+                                        format!(
+                                            "{requirement} trait method {}",
+                                            text(source, method.sig.span())?
+                                        ),
+                                    )
                                 }
                                 syn::TraitItem::Const(constant) => {
-                                    shapes.insert(format!(
-                                        "trait const {}: {}",
-                                        constant.ident,
+                                    let key = trait_member_key(
+                                        "const",
+                                        &constant.ident.to_string(),
+                                        constant.default.is_some(),
+                                    );
+                                    let default = constant
+                                        .default
+                                        .as_ref()
+                                        .map(|(_, value)| {
+                                            text(source, value.span())
+                                                .map(|value| format!(" = {value}"))
+                                        })
+                                        .transpose()?
+                                        .unwrap_or_default();
+                                    let shape = format!(
+                                        "{key}{}: {}{default}",
+                                        text(source, constant.generics.span())?,
                                         text(source, constant.ty.span())?
-                                    ));
+                                    );
+                                    (key, shape)
                                 }
                                 syn::TraitItem::Type(ty) => {
-                                    shapes.insert(format!(
-                                        "trait type {}: {}",
-                                        ty.ident,
+                                    let key = trait_member_key(
+                                        "type",
+                                        &ty.ident.to_string(),
+                                        ty.default.is_some(),
+                                    );
+                                    let default = ty
+                                        .default
+                                        .as_ref()
+                                        .map(|(_, value)| {
+                                            text(source, value.span())
+                                                .map(|value| format!(" = {value}"))
+                                        })
+                                        .transpose()?
+                                        .unwrap_or_default();
+                                    let shape = format!(
+                                        "{key}{}: {}{default}",
+                                        text(source, ty.generics.span())?,
                                         text(source, ty.bounds.span())?
-                                    ));
+                                    );
+                                    (key, shape)
                                 }
-                                _ => {}
-                            }
+                                _ => continue,
+                            };
+                            shapes.insert(shape.clone());
+                            api.trait_members.insert(key, shape);
                         }
                     }
                     _ => {
@@ -1575,10 +1668,10 @@ fn expanded_api_shape(
         &file.items,
         &mut Vec::new(),
         &wanted,
-        &mut shapes,
+        &mut api,
         legacy_use_paths,
     )?;
-    Ok(shapes)
+    Ok(api)
 }
 
 fn apply_non_doc_cfg(krate: &mut Crate, cfg: &RustcCfg) -> Result<(), String> {
@@ -3697,6 +3790,7 @@ mod qualified_external {
 "#;
         let shapes = expanded_api_shape(source, &import, false).unwrap();
         let methods = shapes
+            .shapes
             .iter()
             .filter(|shape| shape.starts_with("impl"))
             .collect::<Vec<_>>();
@@ -3718,6 +3812,7 @@ mod qualified_external {
             );
             let shapes = expanded_api_shape(&source, &import, false).unwrap();
             let methods = shapes
+                .shapes
                 .iter()
                 .filter(|shape| shape.starts_with("impl"))
                 .collect::<Vec<_>>();
