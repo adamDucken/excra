@@ -207,6 +207,61 @@ fn module_and_extern_aliases_retain_the_cargo_dependency_name() {
 }
 
 #[test]
+fn self_crate_aliases_resolve_direct_nested_and_reexported_paths() {
+    let workspace = workspace(&["app", "facade", "origin"]);
+    write_member(&workspace, "app", "facade = { path = \"../facade\" }", "");
+    write_member(
+        &workspace,
+        "facade",
+        "origin = { path = \"../origin\" }",
+        r#"
+pub extern crate self as me;
+pub struct Thing;
+pub use me as again;
+pub use again as chain;
+pub use origin::External;
+pub mod nested {
+    pub extern crate self as local;
+    pub use crate::me as route;
+    pub use route::Thing as Reexported;
+}
+pub mod globbed {
+    pub use crate::me::*;
+    pub use crate::*;
+}
+"#,
+    );
+    write_member(&workspace, "origin", "", "pub struct External;\n");
+    lock(&workspace);
+
+    for path in [
+        "me::Thing",
+        "me::me::Thing",
+        "chain::Thing",
+        "nested::local::Thing",
+        "nested::route::Thing",
+        "nested::Reexported",
+        "globbed::Thing",
+    ] {
+        let output = query(&workspace, &format!("use facade::{path};"));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("definition: pub struct Thing;\n"),
+            "{path}: {stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.status.success());
+    }
+    assert_definition(
+        query(&workspace, "use facade::me::External;"),
+        "definition: pub struct External;",
+    );
+    let output = query(&workspace, "use facade::me::me::Missing;");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not found"));
+}
+
+#[test]
 fn local_module_shadows_same_named_external_crate_in_reexport_source() {
     let workspace = workspace(&["app", "facade", "origin", "alternate"]);
     write_member(&workspace, "app", "facade = { path = \"../facade\" }", "");

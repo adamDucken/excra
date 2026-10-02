@@ -456,16 +456,20 @@ fn follow_use_or_external(
                     .to_string(),
             ));
         }
+        if !visited.insert(id) {
+            return Err(SymbolError::InvalidRustdoc(
+                "cycle while following rustdoc use item".to_string(),
+            ));
+        }
+        if krate.index.get(&id).and_then(extern_crate_name) == Some("self") {
+            id = krate.root;
+            continue;
+        }
         if let Some(external) = krate.index.get(&id).and_then(external_from_extern_crate) {
             return Ok(Followed::External(external));
         }
         if let Some(external) = external_from_id(krate, id) {
             return Ok(Followed::External(external));
-        }
-        if !visited.insert(id) {
-            return Err(SymbolError::InvalidRustdoc(
-                "cycle while following rustdoc use item".to_string(),
-            ));
         }
         let current = item(krate, id)?;
         let ItemEnum::Use(use_item) = &current.inner else {
@@ -701,7 +705,7 @@ fn external_from_id(krate: &Crate, id: Id) -> Option<ExternalReexport> {
     })
 }
 
-fn external_from_extern_crate(item: &Item) -> Option<ExternalReexport> {
+fn extern_crate_name(item: &Item) -> Option<&str> {
     let ItemEnum::ExternCrate { name, rename } = &item.inner else {
         return None;
     };
@@ -711,8 +715,12 @@ fn external_from_extern_crate(item: &Item) -> Option<ExternalReexport> {
     } else {
         name
     };
+    Some(identifier_key(crate_name))
+}
+
+fn external_from_extern_crate(item: &Item) -> Option<ExternalReexport> {
     Some(ExternalReexport {
-        crate_name: identifier_key(crate_name).to_string(),
+        crate_name: extern_crate_name(item)?.to_string(),
         path: Vec::new(),
         canonical_fallback: None,
         via_glob: false,
@@ -1182,6 +1190,10 @@ fn follow_use(krate: &Crate, mut id: Id, visited: &mut HashSet<Id>) -> Result<Id
                     .to_string(),
             ));
         }
+        if extern_crate_name(current) == Some("self") {
+            id = krate.root;
+            continue;
+        }
         let ItemEnum::Use(use_item) = &current.inner else {
             return Ok(id);
         };
@@ -1216,6 +1228,10 @@ fn canonical_item_id(krate: &Crate, mut id: Id) -> Result<Id, SymbolError> {
                 "item is not available in the selected non-doc compilation configuration"
                     .to_string(),
             ));
+        }
+        if extern_crate_name(current) == Some("self") {
+            id = krate.root;
+            continue;
         }
         let ItemEnum::Use(use_item) = &current.inner else {
             return Ok(id);
